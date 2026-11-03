@@ -590,22 +590,17 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             boolean sprinting = p.isSprinting() && !exhausted;
             if (exhausted && p.isSprinting()) p.setSprinting(false);
+            boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
+            // Only stationary players regenerate. No walk-regen loophole.
+            boolean attemptedMove = tick - exhaustedMoveAttempt.getOrDefault(id, -10000) <= 2;
             if (sprinting) {
                 double drain = id.equals(carrier)
                     ? getConfig().getDouble("stamina.sprint-with-ball-per-second", 9.0)
                     : getConfig().getDouble("stamina.sprint-per-second", 5.0);
-                // Lower stamina makes prolonged sprinting increasingly expensive.
                 if (value < 40.0) drain *= 1.5;
                 value -= drain / 20.0;
-            } else {
-                // At zero, recovery only starts after the player has stopped TRYING to move.
-                // PlayerMoveEvent cancels horizontal movement and records attempted movement.
-                boolean recoveryBlocked = exhausted && value < 30.0
-                    && tick - exhaustedMoveAttempt.getOrDefault(id, -10000) <= 2;
-                boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
-                double regen = recoveryBlocked ? 0.0 : moving
-                    ? getConfig().getDouble("stamina.walk-regen-per-second", 2.0)
-                    : getConfig().getDouble("stamina.idle-regen-per-second", 7.0);
+            } else if (p.isOnGround() && !moving && !attemptedMove) {
+                double regen = getConfig().getDouble("stamina.idle-regen-per-second", 9.0);
                 if (id.equals(carrier)) regen *= getConfig().getDouble("stamina.ball-regen-multiplier", 0.6);
                 value += regen / 20.0;
             }
@@ -617,14 +612,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 exhausted = true;
                 p.setSprinting(false);
             }
-            // Gradual slowdown begins BEFORE stamina reaches zero.
-            // Remember the original speed only once, so repeated ticks never compound it.
-            if (value < 40.0) {
+            // Hard freeze only at 0-5; above that the player can walk again.
+            // Slowness scales up gradually and is still noticeable at 20 stamina.
+            if (value <= 30.0) {
                 baseWalkSpeed.putIfAbsent(id, p.getWalkSpeed());
                 float original = baseWalkSpeed.get(id);
-                double multiplier = value >= 15.0
-                    ? 0.85 + 0.15 * ((value - 15.0) / 25.0)
-                    : 0.65 + 0.20 * (value / 15.0);
+                double multiplier = value <= 5.0 ? 0.0
+                    : 0.35 + 0.65 * ((value - 5.0) / 25.0);
                 p.setWalkSpeed((float) Math.max(0.0, Math.min(1.0, original * multiplier)));
             } else restoreSpeed(p);
             stamina.put(id, value);
@@ -633,7 +627,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 StringBuilder bar = new StringBuilder("§d⚡ §7[");
                 for (int i = 0; i < 10; i++) bar.append(i < bars ? (value < 25 ? "§c▌" : "§d▌") : "§8▌");
                 bar.append("§7] §f").append((int)Math.round(value)).append("/100");
-                if (exhausted) bar.append(" §cSTEH BLEIBEN / ERHOLEN");
+                if (value <= 5.0) bar.append(" §cSTEH BLEIBEN!");
+                else if (exhausted) bar.append(" §6SPRINT GESPERRT");
                 if (id.equals(carrier)) bar.append(" §7| §d🏀");
                 p.sendActionBar(bar.toString());
             }
@@ -647,7 +642,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     public void onExhaustedMove(PlayerMoveEvent e) {
         Player p = e.getPlayer();
         UUID id = p.getUniqueId();
-        if (!sprintUnlock.containsKey(id) || energy(p) >= 30.0 || e.getTo() == null) return;
+        if (energy(p) > 5.0 || e.getTo() == null) return;
         Location from = e.getFrom();
         Location to = e.getTo();
         double dx = to.getX() - from.getX();
