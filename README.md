@@ -1,11 +1,20 @@
-# BasketballCraft V0.5 — test build
+# BasketballCraft v0.6 (Paper 1.21.11)
 
-Paper 1.21.11 / Java 21. Build: GitHub Actions or `mvn clean package`.
+## Installation
+1. Java 21, Paper 1.21.11.
+2. GitHub Actions Build (oder `mvn clean package`); JAR aus `target/` in `plugins/`.
+3. `BasketballCraft-v0.6-Resourcepack.zip` in `.minecraft/resourcepacks`, aktivieren, F3+T.
+4. Server komplett neu starten. Alte V0.5 JAR entfernen.
+5. `/bc jersey` gibt Trikot/Shorts ins Inventar (manuell anziehen).
+6. `/bc sethoop red` und `/bc sethoop blue` an den exakten Ringmittelpunkten setzen; `/bc showhoops` zeigt beide Trefferkreise.
+7. `/bc ball`, Linksklick Laden, zweiter Linksklick Release. Auf Korb in horizontaler Richtung schauen.
 
-- `/bc ball` creates the ball; left click starts meter, second left click releases.
-- `/bc sethoop red|blue` saves rim center at eye position; `/bc showhoops` displays scoring rings.
-- Shots aimed within 28 degrees of a configured hoop receive a physically simulated arc; the shot can still miss.
-- `/bc jersey` EQUIPS the chestplate and leggings into the armor slots, returning old armor to inventory.
-- Use accompanying V0.5 resourcepack ZIP in Minecraft resourcepacks; place above other packs.
+## Änderungen
+- Neues cleanes violettes Ballmodell (kein Gehirn-Zickzack mehr)
+- Flugbahn wird aus Distanz, Gravitation und Luftwiderstand berechnet, auch bei Würfen vom Boden
+- Korbtreffer anhand der tatsächlichen Durchquerung der Ringebene während Substeps
+- Grüne Releases sehr genau; schlechte Releases können daneben gehen
+- Jerseys werden nicht mehr zwangsweise angezogen
+- Eigene Equipment-Texturen; das Sichtbarkeitsproblem muss auf einem 1.21.11 Client verifiziert werden
 
-**Limitations:** This is a beta. Hoop detection still requires a downward crossing of the rim plane, and the custom armor uses vanilla armor geometry, not articulated 3D clothing. The aiming assist is an approximation, not guaranteed physics. Actual in-game test required.
+**Hinweis:** Technischer Quellcode-Release. Maven-/Ingame-Test muss noch durchgeführt werden. Kein Versprechen, dass das Equipment auf jedem Client sofort korrekt gerendert wird.

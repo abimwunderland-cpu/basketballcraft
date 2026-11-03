@@ -28,13 +28,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private UUID carrier;
     private UUID lastShooter;
     private Location shotOrigin;
+    private boolean scoredThisFlight;
     private boolean airborne;
     private final Map<String, Location> hoops = new HashMap<>();
     private final Map<String, Integer> scores = new HashMap<>();
     private BukkitTask ticker;
     private int tick;
     private final Set<UUID> hoopViewers = new HashSet<>();
-    private final double hoopRadius = 0.78;
+    private final double hoopRadius = 0.92;
     private final Map<UUID, Long> charging = new HashMap<>();
     private final Map<UUID, Integer> chargeTicks = new HashMap<>();
     private static final int SHOT_CYCLE = 44;
@@ -55,7 +56,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             scores.put(side, 0);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.5 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.6 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
@@ -92,7 +93,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             entity.setTeleportDuration(1);
             entity.setPersistent(false);
         });
-        velocity.zero(); airborne = false; lastShooter = null; shotOrigin = null; charging.clear(); chargeTicks.clear();
+        velocity.zero(); airborne = false; scoredThisFlight = false; lastShooter = null; shotOrigin = null; charging.clear(); chargeTicks.clear();
     }
     private void clearBall() {
         if (carrier != null) {
@@ -141,30 +142,52 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             }
             velocity = direction.multiply(strength);
             velocity.setY(velocity.getY() + 0.13 + 0.07 * charge);
-            // Skill-assisted arc: only when the camera is pointing toward a hoop.
-            // A timed green release reduces lateral error; it does not guarantee a basket.
+            // Find a target using horizontal facing: players should aim at the hoop,
+            // not above the hoop. This is important for shots from ground level.
             Location target = null;
-            double bestAngle = getConfig().getDouble("shooting.assist-max-angle-degrees", 28.0);
-            for (Location hoop : hoops.values()) {
-                if (!hoop.getWorld().equals(p.getWorld())) continue;
-                Vector toHoop = hoop.toVector().subtract(ball.toVector());
-                if (toHoop.lengthSquared() < 1 || toHoop.lengthSquared() > 22 * 22) continue;
-                double angle = Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, direction.dot(toHoop.normalize())))));
-                if (angle < bestAngle) { bestAngle = angle; target = hoop; }
+            double bestAngle = getConfig().getDouble("shooting.assist-max-angle-degrees", 48.0);
+            Vector flatLook = direction.clone().setY(0);
+            if (flatLook.lengthSquared() > 0.001) {
+                flatLook.normalize();
+                for (Location hoop : hoops.values()) {
+                    if (!hoop.getWorld().equals(p.getWorld())) continue;
+                    Vector offset = hoop.toVector().subtract(ball.toVector()).setY(0);
+                    double d = offset.length();
+                    if (d < 1.6 || d > getConfig().getDouble("shooting.max-distance", 22.0)) continue;
+                    double angle = Math.toDegrees(Math.acos(Math.max(-1.0, Math.min(1.0, flatLook.dot(offset.normalize())))));
+                    if (angle < bestAngle) { bestAngle = angle; target = hoop; }
+                }
             }
             if (target != null) {
-                Vector horizontal = target.toVector().subtract(ball.toVector()).setY(0);
-                double distance = horizontal.length();
-                double flightTicks = Math.max(12.0, Math.min(34.0, distance / 0.38 + 7));
-                // Solve ballistic path for descending arrival at hoop height.
-                double g = setting("gravity", 0.045);
-                double vy = (target.getY() - ball.getY() + 0.5 * g * flightTicks * flightTicks) / flightTicks;
-                Vector aimed = horizontal.multiply(1.0 / flightTicks);
-                aimed.setY(vy);
-                // Slight error outside green window, amplified by distance.
-                double error = green ? 0.015 : 0.07 + Math.abs(phase - 26) * 0.007;
-                aimed.add(new Vector((Math.random() - 0.5) * error, 0, (Math.random() - 0.5) * error));
-                velocity = aimed;
+                // Simulate the same discrete gravity and drag as step(), solving
+                // for a DESCENDING crossing of the hoop plane. Never require the
+                // player to stand above the hoop.
+                Vector delta = target.toVector().subtract(ball.toVector());
+                double distance = Math.hypot(delta.getX(), delta.getZ());
+                int duration = (int)Math.max(16, Math.min(39, 17 + distance * 0.95));
+                double drag = setting("drag", 0.992);
+                double gravity = setting("gravity", 0.045);
+                double horizontalSum = 0, verticalGravity = 0, vyFactor = 0;
+                for (int i = 0; i < duration; i++) {
+                    horizontalSum += Math.pow(drag, i + 1);
+                    vyFactor += Math.pow(drag, i + 1);
+                    verticalGravity += gravity * (1 - Math.pow(drag, i + 1)) / (1 - drag + 1e-12);
+                }
+                // Exact recurrence: v_n = drag*v_(n-1) - gravity
+                // y(T) = vy0*sum(drag^i) - gravity*sum((1-drag^i)/(1-drag))
+                double gSum = 0;
+                for (int i = 1; i <= duration; i++) gSum += (1 - Math.pow(drag, i)) / Math.max(1e-8, 1 - drag);
+                double vx = delta.getX() / horizontalSum;
+                double vz = delta.getZ() / horizontalSum;
+                double vy = (delta.getY() + gravity * gSum) / vyFactor;
+                // Early/late release creates meaningful misses; green is accurate.
+                double error = green ? 0.004 : Math.min(0.15, 0.025 + Math.abs(phase - 26) * 0.005);
+                velocity = new Vector(vx + (Math.random() - 0.5) * error,
+                        vy + (green ? 0 : (phase < GREEN_START ? -0.022 : 0.025)),
+                        vz + (Math.random() - 0.5) * error);
+                p.sendActionBar("§d§lKORB ANVISIERT §7• §f" + String.format(Locale.ROOT, "%.1f", distance) + "m");
+            } else {
+                p.sendActionBar("§7Kein Korb im Blickfeld - freier Wurf");
             }
             p.sendTitle(green ? "§a§lGREEN!" : "§6RELEASE", green ? "§7Perfektes Timing" : "§7Timing: " + phase + "/" + SHOT_CYCLE, 0, 13, 5);
             p.playSound(p, green ? Sound.ENTITY_EXPERIENCE_ORB_PICKUP : Sound.ENTITY_SNOWBALL_THROW, 0.9f, green ? 1.5f : 0.8f);
@@ -260,6 +283,22 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         int parts = Math.max(1, (int)Math.ceil(movement.length() / 0.22));
         for (int i = 0; i < parts; i++) {
             Location next = ball.clone().add(movement.clone().multiply(1.0 / parts));
+            if (velocity.getY() < 0 && lastShooter != null && !scoredThisFlight) {
+                for (var hoopEntry : hoops.entrySet()) {
+                    Location hoop = hoopEntry.getValue();
+                    if (!hoop.getWorld().equals(ball.getWorld())) continue;
+                    if (ball.getY() >= hoop.getY() && next.getY() < hoop.getY()) {
+                        double frac = (ball.getY() - hoop.getY()) / (ball.getY() - next.getY());
+                        double ix = ball.getX() + (next.getX() - ball.getX()) * frac - hoop.getX();
+                        double iz = ball.getZ() + (next.getZ() - ball.getZ()) * frac - hoop.getZ();
+                        if (ix * ix + iz * iz <= hoopRadius * hoopRadius) {
+                            scoredThisFlight = true;
+                            score(hoopEntry.getKey());
+                            return;
+                        }
+                    }
+                }
+            }
             if (next.getBlock().getType().isSolid()) {
                 boolean floor = movement.getY() <= 0 && ball.clone().add(0, -0.12, 0).getBlock().getType().isSolid();
                 if (floor || (velocity.getY() < 0 && !ball.clone().add(0, -0.12, 0).getBlock().getType().isSolid())) {
@@ -273,16 +312,6 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                 break;
             }
             ball = next;
-        }
-        for (var entry : hoops.entrySet()) {
-            Location hoop = entry.getValue();
-            if (!hoop.getWorld().equals(ball.getWorld())) continue;
-            // Hoop marker is the CENTER of the horizontal scoring plane, not the backboard.
-            if (previous.getY() > hoop.getY() && ball.getY() <= hoop.getY() && velocity.getY() < 0) {
-                double x = ball.getX() - hoop.getX();
-                double z = ball.getZ() - hoop.getZ();
-                if (x*x + z*z <= hoopRadius*hoopRadius) { score(entry.getKey()); return; }
-            }
         }
         if (ball.getY() < ball.getWorld().getMinHeight() + 2) { spawnBall(ball.getWorld().getSpawnLocation().add(0, 1, 0)); return; }
         if (velocity.lengthSquared() < 0.0009 && ball.clone().add(0, -0.16, 0).getBlock().getType().isSolid()) {
@@ -331,16 +360,11 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private void giveJersey(Player p) {
         ItemStack chest = jerseyPiece(Material.LEATHER_CHESTPLATE, "§6WOLFSFELL §7| §5Basketball-Trikot [Pack]");
         ItemStack legs = jerseyPiece(Material.LEATHER_LEGGINGS, "§6WOLFSFELL §7| §5Basketball-Shorts [Pack]");
-        // Equip directly into the correct armor slots; return previous armor safely.
-        ItemStack oldChest = p.getInventory().getChestplate();
-        ItemStack oldLegs = p.getInventory().getLeggings();
-        p.getInventory().setChestplate(chest);
-        p.getInventory().setLeggings(legs);
-        for (ItemStack old : List.of(oldChest == null ? new ItemStack(Material.AIR) : oldChest,
-                                   oldLegs == null ? new ItemStack(Material.AIR) : oldLegs)) {
-            if (old.getType() != Material.AIR) p.getInventory().addItem(old).values().forEach(leftover -> p.getWorld().dropItemNaturally(p.getLocation(), leftover));
+        for (ItemStack piece : List.of(chest, legs)) {
+            p.getInventory().addItem(piece).values().forEach(leftover ->
+                    p.getWorld().dropItemNaturally(p.getLocation(), leftover));
         }
-        p.sendMessage("§aJersey und Shorts direkt angezogen! §7Resourcepack V0.5 aktivieren. §eWenn nur Leder angezeigt wird: Equipment-Komponente im Serverlog prüfen.");
+        p.sendMessage("§aTrikot und Shorts ins Inventar gelegt. §7Zieh sie selbst an. §dPack V0.6 aktivieren!");
     }
     private void showHoopOnce(Player p, String side) {
         Location loc = hoops.get(side);
@@ -362,7 +386,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.5 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
+            sender.sendMessage("§6§lBasketballCraft v0.6 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
             sender.sendMessage("§7Ball aufnehmen: Nähe oder Rechtsklick. §fLinksklick: Laden/Release §7| §fShift+Linksklick: Pass");
             return true;
         }
