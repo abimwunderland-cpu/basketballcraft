@@ -1,24 +1,13 @@
-# BasketballCraft v0.3 – Shooting & Jerseys (prototype)
+# BasketballCraft v0.4 - Asset Update (Paper 1.21.11)
 
-Paper 1.21.11 / Java 21 / Maven.
+This update preserves v0.3 shooting and hoop physics.
+- Ball item and ItemDisplay now use the custom item model `basketballcraft:basketball`.
+- /bc jersey gives leather armor with the custom equipment asset `basketballcraft:wolfsfell`.
+- Resourcepack is required on every player's client. No client mod required.
+- Pack format inherited from v0.3.1; check the game compatibility warning on 1.21.11.
+- The ball is an original voxel recreation based on common basketball design, not a downloaded third-party asset.
+- Armor is custom equipment texture on vanilla geometry, NOT animated 3D armor geometry.
+- Back lettering is simplified because vanilla armor UV texture resolution is tiny.
+- Previous shooting input remains two left clicks, not click-and-hold.
 
-## Shooting
-- Ball aufnehmen, **Linksklick** startet den wiederholenden Wurfmeter.
-- **Nochmals Linksklick** löst den Wurf aus (Bukkit bietet kein zuverlässiges Loslassen der Maustaste über das normale Interact-Event).
-- Grünes Fenster: Ticks 23–30 eines 44-Tick-Zyklus. Green Release verbessert die Konsistenz, ist kein Auto-Treffer.
-- **Shift + Linksklick** passt sofort.
-- Richtung und Blickwinkel bleiben wichtig.
-
-## Jerseys
-- `/bc jersey` gibt bordeauxfarbenes Trikot und Shorts.
-- `BasketballCraft-Jerseys.zip` als Client-Resourcepack aktivieren.
-- **Einschränkung:** Das Resourcepack überschreibt die Standard-Lederrüstung für ALLE Lederrüstungen. Es ist ein einfacher texturierter Armor-Prototyp, **kein echtes 3D-Modell** und noch nicht das exakte Frankreich-Design mit WOLFSFELL 10.
-- Kopf/Skin bleiben erhalten. Für selektive Trikots und Rücken-Nummern brauchen wir später ein eigenes Equipment-Asset-System.
-
-## Commands
-`/bc ball`, `/bc sethoop red|blue`, `/bc showhoops`, `/bc jersey`, `/bc score`, `/bc reset`.
-
-## Build
-`mvn -B clean package` oder GitHub Actions (`.github/workflows/build.yml`). JAR unter `target/`.
-
-**Teststatus:** Codeänderungen vorgenommen, nicht auf einem Paper-Server ingame-getestet.
+Installation: replace repo with source ZIP, build via GitHub Actions, replace old plugin JAR, enable resourcepack ZIP at highest priority, F3+T.

@@ -55,7 +55,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             scores.put(side, 0);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.3 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.4 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
@@ -67,6 +67,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         ItemStack item = new ItemStack(Material.ORANGE_CONCRETE);
         ItemMeta meta = item.getItemMeta();
         meta.setDisplayName("§6§lBasketball §7[Linksklick: Laden/Release | Shift+Linksklick: Pass]");
+        meta.setItemModel(new NamespacedKey("basketballcraft", "basketball"));
         meta.getPersistentDataContainer().set(key, PersistentDataType.BYTE, (byte)1);
         item.setItemMeta(meta);
         return item;
@@ -84,7 +85,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         ball = location.clone();
         ball.getWorld().getChunkAt(ball).load();
         display = ball.getWorld().spawn(ball, ItemDisplay.class, entity -> {
-            entity.setItemStack(new ItemStack(Material.ORANGE_CONCRETE));
+            entity.setItemStack(ballItem());
             entity.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
             entity.setTransformation(new Transformation(new Vector3f(-0.23f, -0.23f, -0.23f), new AxisAngle4f(), new Vector3f(0.46f, 0.46f, 0.46f), new AxisAngle4f()));
             entity.setInterpolationDuration(2);
@@ -292,6 +293,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         meta.setColor(Color.fromRGB(87, 21, 43));
         meta.setDisplayName(name);
         meta.setUnbreakable(true);
+        try {
+            Object equipment = meta.getClass().getMethod("getEquippable").invoke(meta);
+            equipment.getClass().getMethod("setModel", NamespacedKey.class).invoke(equipment, new NamespacedKey("basketballcraft", "wolfsfell"));
+            for (java.lang.reflect.Method m : meta.getClass().getMethods()) {
+                if (m.getName().equals("setEquippable") && m.getParameterCount() == 1) { m.invoke(meta, equipment); break; }
+            }
+        } catch (ReflectiveOperationException ex) { getLogger().warning("Equipment-Modell konnte nicht gesetzt werden: " + ex.getMessage()); }
         item.setItemMeta(meta);
         return item;
     }
@@ -301,7 +309,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         for (ItemStack item : List.of(chest, legs)) {
             p.getInventory().addItem(item).values().forEach(leftover -> p.getWorld().dropItemNaturally(p.getLocation(), leftover));
         }
-        p.sendMessage("§aTrikot erhalten! §7Für das Muster BasketballCraft-Jerseys.zip als Resourcepack aktivieren. §cPack verändert aktuell ALLE Lederrüstungen.");
+        p.sendMessage("§aTrikot erhalten! §7Für das Muster BasketballCraft-Jerseys.zip als Resourcepack aktivieren. §aPack nutzt eigene Equipment-Texturen.");
     }
     private void showHoopOnce(Player p, String side) {
         Location loc = hoops.get(side);
@@ -323,7 +331,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.3 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
+            sender.sendMessage("§6§lBasketballCraft v0.4 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
             sender.sendMessage("§7Ball aufnehmen: Nähe oder Rechtsklick. §fLinksklick: Laden/Release §7| §fShift+Linksklick: Pass");
             return true;
         }
