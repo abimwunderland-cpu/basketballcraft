@@ -588,8 +588,11 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 exhaustedMoveAttempt.remove(id);
                 exhausted = false;
             }
-            boolean sprinting = p.isSprinting() && !exhausted;
-            if (exhausted && p.isSprinting()) p.setSprinting(false);
+            // Apply fatigue in BOTH directions: as stamina falls and as it recovers.
+            // A sprinting player otherwise bypasses walk-speed slowdown while draining.
+            boolean fatigueSprintBlocked = value <= 30.0 || exhausted;
+            boolean sprinting = p.isSprinting() && !fatigueSprintBlocked;
+            if (fatigueSprintBlocked && p.isSprinting()) p.setSprinting(false);
             boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
             // Only stationary players regenerate. No walk-regen loophole.
             boolean attemptedMove = tick - exhaustedMoveAttempt.getOrDefault(id, -10000) <= 2;
@@ -615,6 +618,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             // Hard freeze only at 0-5; above that the player can walk again.
             // Slowness scales up gradually and is still noticeable at 20 stamina.
             if (value <= 30.0) {
+                if (p.isSprinting()) p.setSprinting(false);
                 baseWalkSpeed.putIfAbsent(id, p.getWalkSpeed());
                 float original = baseWalkSpeed.get(id);
                 double multiplier = value <= 5.0 ? 0.0
@@ -658,7 +662,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         p.setVelocity(new Vector(0, v.getY(), 0));
     }
     @EventHandler public void onSprint(PlayerToggleSprintEvent e) {
-        if (e.isSprinting() && sprintUnlock.containsKey(e.getPlayer().getUniqueId()) && energy(e.getPlayer()) < 30.0) {
+        if (e.isSprinting() && (energy(e.getPlayer()) <= 30.0 || sprintUnlock.containsKey(e.getPlayer().getUniqueId()))) {
             e.setCancelled(true);
             e.getPlayer().setSprinting(false);
         }

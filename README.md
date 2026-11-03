@@ -1,26 +1,15 @@
-# BasketballCraft v0.8.5 — Ausdauer-Stop
+# BasketballCraft v0.8.7 – Fatigue while stamina is falling
 
-Basis: v0.8.4. Keine Änderungen am Resourcepack, Court-Editor, Körben oder Dreierlinien.
+Based on v0.8.6. No resource pack changes.
 
-- Bei 0 Ausdauer: horizontale Bewegung wird blockiert (Blickrichtung und vertikale Bewegung bleiben möglich).
-- Solange der Spieler weiter versucht zu laufen, regeneriert die Ausdauer nicht.
-- Erst nach Stillstand beginnt die Regeneration; bei 30 Ausdauer wird die Bewegung wieder freigegeben.
-- Sprint bleibt während der Erschöpfung gesperrt.
-- Im normalen Betrieb bleiben die bisherigen Stamina-Raten erhalten.
-
-## Installation
-ZIP ins GitHub-Repository hochladen und GitHub Actions ausführen. Die JAR aus dem Actions-Artefakt auf dem Paper-1.21.11-Server installieren. Kein neues Resourcepack nötig.
+## Fix
+- Sprint is now cancelled whenever stamina is <=30, including on the way DOWN, not only during recovery.
+- At 6–30, reduced walk speed applies while stamina decreases AND increases.
+- At 0–5, horizontal movement remains locked.
+- Regeneration continues to require standing still.
+- Exhaustion sprint lock is retained until 30 stamina.
 
 ## Test
-Sprinten bis 0 -> Weiterlaufen versuchen (keine Bewegung/Regeneration) -> Bewegungstasten loslassen (Regeneration) -> ab 30 wieder laufen.
+Sprint from 100 down to 30, 20, 5 and 0; verify slowdown BEFORE reaching 0. Release movement keys to regenerate, and verify the same slowdown while stamina rises.
 
-**Hinweis:** Java-Build und Ingame-Test wurden hier nicht ausgeführt.
-
-
-## V0.8.6 stamina tuning
-- Full horizontal freeze **only at 0–5 stamina**; from above 5 movement is possible again.
-- Progressive slowdown from 30 stamina downward (noticeable at 20).
-- Sprint stays locked until stamina reaches 30 after full exhaustion.
-- Stamina regenerates **only when stationary and grounded**, not while walking.
-- Idle regeneration increased from 7 to 9 stamina/second (ball carrier multiplier remains 0.6).
-- No resourcepack changes.
+GitHub Actions builds the JAR. This source ZIP has not been compiled or tested on a running Paper server here.
