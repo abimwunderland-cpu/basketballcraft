@@ -20,6 +20,8 @@ passing:
 stamina:
   sprint-per-second: 5.0
   sprint-with-ball-per-second: 9.0
+  walk-per-second: 2.5
+  walk-with-ball-per-second: 3.5
   idle-regen-per-second: 9.0
   ball-regen-multiplier: 0.6
   pass-cost: 2.0

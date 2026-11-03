@@ -1,15 +1,14 @@
-# BasketballCraft v0.8.7 – Fatigue while stamina is falling
+# BasketballCraft v0.8.8 – stamina movement fix
 
-Based on v0.8.6. No resource pack changes.
+Fix: walking now drains stamina, sprinting drains faster, and stamina regenerates **only when standing still**. Actual horizontal movement is tracked using PlayerMoveEvent instead of relying solely on velocity or sprint state. This also applies when stamina drops below 30.
 
-## Fix
-- Sprint is now cancelled whenever stamina is <=30, including on the way DOWN, not only during recovery.
-- At 6–30, reduced walk speed applies while stamina decreases AND increases.
-- At 0–5, horizontal movement remains locked.
-- Regeneration continues to require standing still.
-- Exhaustion sprint lock is retained until 30 stamina.
+- Sprint without ball: 5/s; with ball: 9/s
+- Walk without ball: 2.5/s; with ball: 3.5/s
+- Stand still: +9/s (with ball: x0.6)
+- 0–5: horizontal movement blocked; 6–20: heavy slowdown; 21–30: mild slowdown
+- Sprint blocked at <=30, with exhaustion unlock at 30
 
-## Test
-Sprint from 100 down to 30, 20, 5 and 0; verify slowdown BEFORE reaching 0. Release movement keys to regenerate, and verify the same slowdown while stamina rises.
+All other systems retained from v0.8.7. No resourcepack changes.
 
-GitHub Actions builds the JAR. This source ZIP has not been compiled or tested on a running Paper server here.
+## Build
+GitHub Actions workflow included. Java 21, Paper 1.21.11. Build not verified locally.

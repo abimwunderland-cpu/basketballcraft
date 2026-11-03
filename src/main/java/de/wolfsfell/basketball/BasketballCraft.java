@@ -50,6 +50,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Map<UUID, Double> stamina = new HashMap<>();
     private final Map<UUID, Integer> sprintUnlock = new HashMap<>();
     private final Map<UUID, Integer> exhaustedMoveAttempt = new HashMap<>();
+    private final Map<UUID, Integer> lastHorizontalMove = new HashMap<>();
     private final Map<UUID, Integer> jumpWindow = new HashMap<>();
     private final Map<UUID, Boolean> grounded = new HashMap<>();
     private final Map<UUID, Integer> sprintRecent = new HashMap<>();
@@ -438,7 +439,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); lastHorizontalMove.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             dropCarrier(event.getEntity());
@@ -594,15 +595,26 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             boolean sprinting = p.isSprinting() && !fatigueSprintBlocked;
             if (fatigueSprintBlocked && p.isSprinting()) p.setSprinting(false);
             boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
-            // Only stationary players regenerate. No walk-regen loophole.
+            // PlayerMoveEvent records actual horizontal movement even when sprint is disabled.
+            // Velocity alone is unreliable: slowed players can have tiny velocity while walking.
             boolean attemptedMove = tick - exhaustedMoveAttempt.getOrDefault(id, -10000) <= 2;
-            if (sprinting) {
-                double drain = id.equals(carrier)
-                    ? getConfig().getDouble("stamina.sprint-with-ball-per-second", 9.0)
-                    : getConfig().getDouble("stamina.sprint-per-second", 5.0);
-                if (value < 40.0) drain *= 1.5;
+            boolean recentlyMoved = tick - lastHorizontalMove.getOrDefault(id, -10000) <= 3;
+            boolean activelyMoving = moving || attemptedMove || recentlyMoved;
+            if (activelyMoving) {
+                double drain;
+                if (sprinting) {
+                    drain = id.equals(carrier)
+                        ? getConfig().getDouble("stamina.sprint-with-ball-per-second", 9.0)
+                        : getConfig().getDouble("stamina.sprint-per-second", 5.0);
+                    if (value < 40.0) drain *= 1.5;
+                } else {
+                    drain = id.equals(carrier)
+                        ? getConfig().getDouble("stamina.walk-with-ball-per-second", 3.5)
+                        : getConfig().getDouble("stamina.walk-per-second", 2.5);
+                }
                 value -= drain / 20.0;
-            } else if (p.isOnGround() && !moving && !attemptedMove) {
+            } else if (p.isOnGround()) {
+                // Standing still is the ONLY way to gain stamina.
                 double regen = getConfig().getDouble("stamina.idle-regen-per-second", 9.0);
                 if (id.equals(carrier)) regen *= getConfig().getDouble("stamina.ball-regen-multiplier", 0.6);
                 value += regen / 20.0;
@@ -646,11 +658,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     public void onExhaustedMove(PlayerMoveEvent e) {
         Player p = e.getPlayer();
         UUID id = p.getUniqueId();
-        if (energy(p) > 5.0 || e.getTo() == null) return;
+        if (e.getTo() == null) return;
         Location from = e.getFrom();
         Location to = e.getTo();
         double dx = to.getX() - from.getX();
         double dz = to.getZ() - from.getZ();
+        if (dx * dx + dz * dz > 0.000001) lastHorizontalMove.put(id, tick);
+        if (energy(p) > 5.0) return;
         // Preserve looking around and vertical motion, but disallow horizontal walking.
         if (dx * dx + dz * dz < 0.000001) return;
         exhaustedMoveAttempt.put(id, tick);
