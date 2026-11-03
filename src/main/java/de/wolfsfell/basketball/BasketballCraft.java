@@ -9,6 +9,8 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.player.*;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.LeatherArmorMeta;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -31,6 +33,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private final Map<String, Integer> scores = new HashMap<>();
     private BukkitTask ticker;
     private int tick;
+    private final Set<UUID> hoopViewers = new HashSet<>();
+    private final double hoopRadius = 0.55;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -46,7 +50,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             scores.put(side, 0);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.1 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.2 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
@@ -132,7 +136,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             carry(p);
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             event.getDrops().removeIf(this::isBall);
@@ -156,6 +160,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     private void step() {
         tick++;
+        if (tick % 5 == 0) drawHoops();
         if (ball == null || display == null || !display.isValid()) return;
         if (carrier != null) {
             Player p = Bukkit.getPlayer(carrier);
@@ -205,7 +210,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             if (previous.getY() > hoop.getY() && ball.getY() <= hoop.getY() && velocity.getY() < 0) {
                 double x = ball.getX() - hoop.getX();
                 double z = ball.getZ() - hoop.getZ();
-                if (x*x + z*z <= 0.55*0.55) { score(entry.getKey()); return; }
+                if (x*x + z*z <= hoopRadius*hoopRadius) { score(entry.getKey()); return; }
             }
         }
         if (ball.getY() < ball.getWorld().getMinHeight() + 2) { spawnBall(ball.getWorld().getSpawnLocation().add(0, 1, 0)); return; }
@@ -219,6 +224,48 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             }
         }
     }
+    private void drawHoops() {
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            if (!hoopViewers.contains(viewer.getUniqueId())) continue;
+            for (var entry : hoops.entrySet()) {
+                Location center = entry.getValue();
+                if (!center.getWorld().equals(viewer.getWorld()) || center.distanceSquared(viewer.getLocation()) > 48*48) continue;
+                org.bukkit.Particle.DustOptions dust = new org.bukkit.Particle.DustOptions(
+                    entry.getKey().equals("red") ? Color.fromRGB(255, 50, 65) : Color.fromRGB(45, 125, 255), 1.15f);
+                for (int i = 0; i < 32; i++) {
+                    double angle = Math.PI * 2 * i / 32.0;
+                    viewer.spawnParticle(Particle.DUST, center.getX() + Math.cos(angle)*hoopRadius,
+                        center.getY(), center.getZ() + Math.sin(angle)*hoopRadius, 1, 0, 0, 0, 0, dust);
+                }
+                viewer.spawnParticle(Particle.END_ROD, center, 1, 0, 0, 0, 0);
+            }
+        }
+    }
+    private ItemStack jerseyPiece(Material type, String name) {
+        ItemStack item = new ItemStack(type);
+        LeatherArmorMeta meta = (LeatherArmorMeta) item.getItemMeta();
+        meta.setColor(Color.fromRGB(87, 21, 43));
+        meta.setDisplayName(name);
+        meta.setUnbreakable(true);
+        item.setItemMeta(meta);
+        return item;
+    }
+    private void giveJersey(Player p) {
+        ItemStack chest = jerseyPiece(Material.LEATHER_CHESTPLATE, "§6WOLFSFELL §7| §5Basketball-Trikot");
+        ItemStack legs = jerseyPiece(Material.LEATHER_LEGGINGS, "§6WOLFSFELL §7| §5Basketball-Shorts");
+        for (ItemStack item : List.of(chest, legs)) {
+            p.getInventory().addItem(item).values().forEach(leftover -> p.getWorld().dropItemNaturally(p.getLocation(), leftover));
+        }
+        p.sendMessage("§aTrikot-Prototyp erhalten! §7Bordeaux-Lederrüstung; das 3D-Resourcepack folgt separat.");
+    }
+    private void showHoopOnce(Player p, String side) {
+        Location loc = hoops.get(side);
+        if (loc == null) return;
+        p.sendMessage("§e" + side.toUpperCase(Locale.ROOT) + " §7Trefferzone: §f" +
+            String.format(Locale.ROOT, "%.2f / %.2f / %.2f", loc.getX(), loc.getY(), loc.getZ()) +
+            " §7(Radius " + hoopRadius + " Blöcke)");
+        p.playSound(p, Sound.BLOCK_NOTE_BLOCK_PLING, 0.7f, 1.4f);
+    }
     private void score(String side) {
         int points = 2;
         Location hoop = hoops.get(side);
@@ -231,7 +278,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.1 §7| /bc ball, /bc sethoop red|blue, /bc start, /bc reset, /bc score");
+            sender.sendMessage("§6§lBasketballCraft v0.2 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
             sender.sendMessage("§7Ball aufnehmen: Nähe oder Rechtsklick. §fLinksklick: Wurf §7| §fShift+Linksklick: Pass");
             return true;
         }
@@ -242,6 +289,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         if (!sender.hasPermission("basketball.admin")) { sender.sendMessage("§cKeine Berechtigung."); return true; }
         if (!(sender instanceof Player p)) { sender.sendMessage("Only players can configure the court."); return true; }
         switch (args[0].toLowerCase(Locale.ROOT)) {
+            case "showhoops" -> {
+                if (hoopViewers.remove(p.getUniqueId())) p.sendMessage("§7Korbmarkierungen ausgeschaltet.");
+                else { hoopViewers.add(p.getUniqueId()); p.sendMessage("§aKorbmarkierungen eingeschaltet. §7Nur du siehst sie.");
+                    for (String side : List.of("red", "blue")) showHoopOnce(p, side);
+                    drawHoops();
+                }
+            }
+            case "jersey" -> { giveJersey(p); }
             case "ball", "start" -> { spawnBall(p.getLocation().add(0, 1.0, 0)); p.sendMessage("§aBasketball gespawnt!"); }
             case "sethoop" -> {
                 if (args.length < 2 || !List.of("red", "blue").contains(args[1].toLowerCase(Locale.ROOT))) { p.sendMessage("§c/bc sethoop red|blue"); return true; }
@@ -255,7 +310,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                 getConfig().set(base + ".y", loc.getY());
                 getConfig().set(base + ".z", loc.getZ());
                 saveConfig();
-                p.sendMessage("§a" + side + " hoop center set at your EYE position (" + String.format(Locale.ROOT, "%.2f %.2f %.2f", loc.getX(), loc.getY(), loc.getZ()) + ").");
+                p.sendMessage("§aKorbmitte gespeichert (Augenhöhe). §7Mit /bc showhoops prüfen.");
+                showHoopOnce(p, side);
+                hoopViewers.add(p.getUniqueId());
             }
             case "reset" -> { scores.put("red", 0); scores.put("blue", 0); spawnBall(p.getLocation().add(0, 1, 0)); p.sendMessage("§aSpielstand zurückgesetzt."); }
             default -> p.sendMessage("§cUnbekannter Befehl. /bc help");

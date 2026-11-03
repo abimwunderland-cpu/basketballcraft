@@ -1,36 +1,15 @@
-# BasketballCraft v0.1 – First Tip-Off
+# BasketballCraft 0.2 – Hoop Visualization + Jersey Prototype
 
-**Paper 1.21.11 · Java 21 · No client mods**
+Paper 1.21.11 / Java 21 / Maven.
 
-## Build with GitHub Actions
-Upload ALL project files, including the hidden `.github/workflows/build.yml`, to the ROOT of a GitHub repository. Open Actions > Build BasketballCraft > Run workflow. Download the artifact `BasketballCraft-v0.1-JAR`, extract it, and put the JAR into `plugins/`. Restart your Paper server.
+## Commands (admin / OP)
+- `/bc sethoop red` and `/bc sethoop blue` — save scoring plane at eye location, show confirmation.
+- `/bc showhoops` — toggle red/blue scoring circle particles (admin-only, visible only to you, within 48 blocks). Markers show the **actual** scoring plane and radius 0.55.
+- `/bc jersey` — receive burgundy leather chestplate and leggings prototype. **This is not a 3D custom jersey or textured resourcepack yet.**
+- `/bc ball`, `/bc start`, `/bc reset`, `/bc score` — as before.
 
-The JAR has NOT been compiled or server-tested in this environment. Check the Actions build log for errors.
+## Build
+GitHub Actions -> Build BasketballCraft -> Run workflow -> download artifact.
 
-## Commands
-- `/bc ball` – spawn ball at your feet
-- `/bc sethoop red` – place the RED scoring center at your current EYE position
-- `/bc sethoop blue` – place the BLUE scoring center at your current EYE position
-- `/bc start` – spawn ball and begin free play
-- `/bc reset` – reset scoreboard and ball
-- `/bc score` – show score
-
-## Controls
-- Walk into the ball or right-click near it to pick it up.
-- Holding ball: left-click to shoot, sneak + left-click to pass.
-- While holding the ball, an orange block bobs in front of your feet as a prototype dribble effect.
-
-## Current limitations
-- Ball is a scaled orange concrete ItemDisplay, **NOT** a finished 3D basketball model. A resource pack is NOT included.
-- Hoop scoring is a mathematical circle at the configured location; no physical rim/backboard collision yet. You must build the hoops yourself and mark their centers while flying.
-- Shooting is direction-based; no charge meter, aim assist, or true basketball shooting arcs yet.
-- No team ownership, court boundary rules, shot clock, steals, blocks, dunks, or persistent stats yet.
-- The first prototype is for functional testing, not competitive play. Collision and pickup edge cases may need tuning.
-- `/bc start` is currently free-play ball spawn, not a timed match.
-- Existing world geometry can interfere with ball movement. Test on a flat court first.
-
-## Configuration
-`plugins/BasketballCraft/config.yml` contains gravity, drag, bounce, friction, throw speeds, pickup radius, and 3-point distance. Hoop positions are saved automatically.
-
-## Credits / licensing
-All included Java source is newly authored for this prototype. No third-party models or source code have been bundled.
+## Notes
+Existing hoop configuration and scoring logic from v0.1 are preserved. Verify scoring and marker alignment in-game. Ball physics are unchanged in this release to avoid regression; improved physics and 3D jersey need separate testing.
