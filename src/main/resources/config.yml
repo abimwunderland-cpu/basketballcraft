@@ -1,0 +1,10 @@
+physics:
+  gravity: 0.045
+  drag: 0.992
+  bounce: 0.67
+  floor-friction: 0.78
+  shoot-speed: 1.16
+  pass-speed: 0.87
+  pickup-radius: 1.4
+court:
+  three-point-distance: 8.0

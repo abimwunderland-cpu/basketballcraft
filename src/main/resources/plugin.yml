@@ -1,0 +1,14 @@
+name: BasketballCraft
+version: '0.1.0'
+main: de.wolfsfell.basketball.BasketballCraft
+api-version: '1.21'
+author: WolfsfellTV
+commands:
+  basketball:
+    description: BasketballCraft controls
+    usage: /basketball help
+    aliases: [bc]
+permissions:
+  basketball.admin:
+    description: Configure courts
+    default: op
