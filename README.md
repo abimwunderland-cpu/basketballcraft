@@ -1,15 +1,24 @@
-# BasketballCraft 0.2 – Hoop Visualization + Jersey Prototype
+# BasketballCraft v0.3 – Shooting & Jerseys (prototype)
 
 Paper 1.21.11 / Java 21 / Maven.
 
-## Commands (admin / OP)
-- `/bc sethoop red` and `/bc sethoop blue` — save scoring plane at eye location, show confirmation.
-- `/bc showhoops` — toggle red/blue scoring circle particles (admin-only, visible only to you, within 48 blocks). Markers show the **actual** scoring plane and radius 0.55.
-- `/bc jersey` — receive burgundy leather chestplate and leggings prototype. **This is not a 3D custom jersey or textured resourcepack yet.**
-- `/bc ball`, `/bc start`, `/bc reset`, `/bc score` — as before.
+## Shooting
+- Ball aufnehmen, **Linksklick** startet den wiederholenden Wurfmeter.
+- **Nochmals Linksklick** löst den Wurf aus (Bukkit bietet kein zuverlässiges Loslassen der Maustaste über das normale Interact-Event).
+- Grünes Fenster: Ticks 23–30 eines 44-Tick-Zyklus. Green Release verbessert die Konsistenz, ist kein Auto-Treffer.
+- **Shift + Linksklick** passt sofort.
+- Richtung und Blickwinkel bleiben wichtig.
+
+## Jerseys
+- `/bc jersey` gibt bordeauxfarbenes Trikot und Shorts.
+- `BasketballCraft-Jerseys.zip` als Client-Resourcepack aktivieren.
+- **Einschränkung:** Das Resourcepack überschreibt die Standard-Lederrüstung für ALLE Lederrüstungen. Es ist ein einfacher texturierter Armor-Prototyp, **kein echtes 3D-Modell** und noch nicht das exakte Frankreich-Design mit WOLFSFELL 10.
+- Kopf/Skin bleiben erhalten. Für selektive Trikots und Rücken-Nummern brauchen wir später ein eigenes Equipment-Asset-System.
+
+## Commands
+`/bc ball`, `/bc sethoop red|blue`, `/bc showhoops`, `/bc jersey`, `/bc score`, `/bc reset`.
 
 ## Build
-GitHub Actions -> Build BasketballCraft -> Run workflow -> download artifact.
+`mvn -B clean package` oder GitHub Actions (`.github/workflows/build.yml`). JAR unter `target/`.
 
-## Notes
-Existing hoop configuration and scoring logic from v0.1 are preserved. Verify scoring and marker alignment in-game. Ball physics are unchanged in this release to avoid regression; improved physics and 3D jersey need separate testing.
+**Teststatus:** Codeänderungen vorgenommen, nicht auf einem Paper-Server ingame-getestet.

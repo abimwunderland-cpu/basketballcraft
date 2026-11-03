@@ -8,3 +8,6 @@ physics:
   pickup-radius: 1.4
 court:
   three-point-distance: 8.0
+
+# Shooting: First left-click starts the meter; second left-click releases.
+# Green window: ticks 23-30 of a repeating 44-tick meter.

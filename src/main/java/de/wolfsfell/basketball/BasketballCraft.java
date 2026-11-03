@@ -35,6 +35,11 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private int tick;
     private final Set<UUID> hoopViewers = new HashSet<>();
     private final double hoopRadius = 0.55;
+    private final Map<UUID, Long> charging = new HashMap<>();
+    private final Map<UUID, Integer> chargeTicks = new HashMap<>();
+    private static final int SHOT_CYCLE = 44;
+    private static final int GREEN_START = 23;
+    private static final int GREEN_END = 30;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -50,17 +55,18 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             scores.put(side, 0);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.2 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.3 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
+        charging.clear(); chargeTicks.clear();
     }
     private double setting(String name, double fallback) { return getConfig().getDouble("physics." + name, fallback); }
     private ItemStack ballItem() {
         ItemStack item = new ItemStack(Material.ORANGE_CONCRETE);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName("§6§lBasketball §7[Linksklick: Wurf | Shift+Linksklick: Pass]");
+        meta.setDisplayName("§6§lBasketball §7[Linksklick: Laden/Release | Shift+Linksklick: Pass]");
         meta.getPersistentDataContainer().set(key, PersistentDataType.BYTE, (byte)1);
         item.setItemMeta(meta);
         return item;
@@ -85,45 +91,72 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             entity.setTeleportDuration(1);
             entity.setPersistent(false);
         });
-        velocity.zero(); airborne = false; lastShooter = null; shotOrigin = null;
+        velocity.zero(); airborne = false; lastShooter = null; shotOrigin = null; charging.clear(); chargeTicks.clear();
     }
     private void clearBall() {
         if (carrier != null) {
             Player p = Bukkit.getPlayer(carrier);
             if (p != null) removeBallItems(p);
         }
-        carrier = null;
+        carrier = null; charging.clear(); chargeTicks.clear();
         if (display != null && display.isValid()) display.remove();
         display = null; ball = null; airborne = false;
     }
     private void carry(Player p) {
         if (carrier != null || ball == null || !p.getWorld().equals(ball.getWorld())) return;
         carrier = p.getUniqueId();
+        charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
         p.getInventory().addItem(ballItem()).forEach((slot, item) -> p.getWorld().dropItemNaturally(p.getLocation(), item));
-        p.sendActionBar("§6🏀 Ballbesitz §7| §fLinksklick: Wurf §7| §fShift+Linksklick: Pass");
+        p.sendActionBar("§6🏀 Ballbesitz §7| §fLinksklick: Laden/Release §7| §fShift+Linksklick: Pass");
         p.playSound(p, Sound.BLOCK_NOTE_BLOCK_HAT, 0.6f, 1.2f);
+    }
+    private void startCharge(Player p) {
+        if (!p.getUniqueId().equals(carrier)) return;
+        charging.put(p.getUniqueId(), (long) tick);
+        chargeTicks.put(p.getUniqueId(), 0);
+        p.sendMessage("§eWurf geladen! §7Nochmals §fLinksklick §7zum Release. §aGRÜN §7= perfektes Timing.");
+        p.playSound(p, Sound.BLOCK_NOTE_BLOCK_HAT, 0.6f, 1.7f);
     }
     private void release(Player p, boolean pass) {
         if (!p.getUniqueId().equals(carrier)) return;
+        int held = chargeTicks.getOrDefault(p.getUniqueId(), 0);
+        charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
         removeBallItems(p);
         carrier = null;
         ball = p.getEyeLocation().add(p.getEyeLocation().getDirection().multiply(0.65));
         Vector direction = p.getEyeLocation().getDirection().normalize();
-        double speed = pass ? setting("pass-speed", 0.87) : setting("shoot-speed", 1.16);
-        velocity = direction.multiply(speed);
-        if (!pass) velocity.setY(velocity.getY() + 0.13);
+        if (pass) {
+            velocity = direction.multiply(setting("pass-speed", 0.87));
+        } else {
+            int phase = held % SHOT_CYCLE;
+            boolean green = phase >= GREEN_START && phase <= GREEN_END;
+            // Charging sets shot strength; releasing in the green window improves consistency.
+            // The player's camera direction remains decisive: no auto-aim or guaranteed basket.
+            double charge = Math.min(1.0, held / 30.0);
+            double strength = setting("shoot-speed", 1.16) * (0.68 + 0.36 * charge);
+            if (!green) {
+                double miss = Math.min(0.15, Math.abs(phase - 26.5) / 150.0);
+                strength *= (phase < GREEN_START ? 1.0 - miss : 1.0 + miss);
+            }
+            velocity = direction.multiply(strength);
+            velocity.setY(velocity.getY() + 0.13 + 0.07 * charge);
+            p.sendTitle(green ? "§a§lGREEN!" : "§6RELEASE", green ? "§7Perfektes Timing" : "§7Timing: " + phase + "/" + SHOT_CYCLE, 0, 13, 5);
+            p.playSound(p, green ? Sound.ENTITY_EXPERIENCE_ORB_PICKUP : Sound.ENTITY_SNOWBALL_THROW, 0.9f, green ? 1.5f : 0.8f);
+        }
         lastShooter = p.getUniqueId();
         shotOrigin = p.getLocation().clone();
         airborne = true;
         if (display != null && display.isValid()) display.teleport(ball);
-        p.playSound(p, Sound.ENTITY_SNOWBALL_THROW, 1.0f, pass ? 1.25f : 0.8f);
+        if (pass) p.playSound(p, Sound.ENTITY_SNOWBALL_THROW, 1f, 1.25f);
     }
     @EventHandler(priority = EventPriority.HIGH) public void onInteract(PlayerInteractEvent event) {
         Player p = event.getPlayer();
         Action action = event.getAction();
         if (p.getUniqueId().equals(carrier) && (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK)) {
             event.setCancelled(true);
-            release(p, p.isSneaking());
+            if (p.isSneaking()) release(p, true);
+            else if (charging.containsKey(p.getUniqueId())) release(p, false);
+            else startCharge(p);
             return;
         }
         if (p.getUniqueId().equals(carrier) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
@@ -136,7 +169,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             carry(p);
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             event.getDrops().removeIf(this::isBall);
@@ -152,7 +185,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private void dropCarrier(Player p) {
         if (!p.getUniqueId().equals(carrier)) return;
         removeBallItems(p);
-        carrier = null;
+        carrier = null; charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
         if (ball != null) {
             ball = p.getLocation().clone().add(0, 0.6, 0);
             velocity.zero(); airborne = true;
@@ -160,6 +193,18 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     private void step() {
         tick++;
+        for (UUID id : new ArrayList<>(charging.keySet())) {
+            Player player = Bukkit.getPlayer(id);
+            if (player == null || !id.equals(carrier)) { charging.remove(id); chargeTicks.remove(id); continue; }
+            int elapsed = chargeTicks.merge(id, 1, Integer::sum);
+            int phase = elapsed % SHOT_CYCLE;
+            int filled = (int) Math.round(20.0 * phase / SHOT_CYCLE);
+            StringBuilder meter = new StringBuilder("§6[");
+            for (int i = 0; i < 20; i++) meter.append(i < filled ? (phase >= GREEN_START && phase <= GREEN_END ? "§a▌" : "§e▌") : "§8▌");
+            meter.append("§6] §7Linksklick: RELEASE");
+            player.sendActionBar(meter.toString());
+            if (phase == GREEN_START) player.playSound(player, Sound.BLOCK_NOTE_BLOCK_PLING, 0.45f, 1.7f);
+        }
         if (tick % 5 == 0) drawHoops();
         if (ball == null || display == null || !display.isValid()) return;
         if (carrier != null) {
@@ -251,12 +296,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         return item;
     }
     private void giveJersey(Player p) {
-        ItemStack chest = jerseyPiece(Material.LEATHER_CHESTPLATE, "§6WOLFSFELL §7| §5Basketball-Trikot");
-        ItemStack legs = jerseyPiece(Material.LEATHER_LEGGINGS, "§6WOLFSFELL §7| §5Basketball-Shorts");
+        ItemStack chest = jerseyPiece(Material.LEATHER_CHESTPLATE, "§6WOLFSFELL §7| §5Basketball-Trikot [Pack]");
+        ItemStack legs = jerseyPiece(Material.LEATHER_LEGGINGS, "§6WOLFSFELL §7| §5Basketball-Shorts [Pack]");
         for (ItemStack item : List.of(chest, legs)) {
             p.getInventory().addItem(item).values().forEach(leftover -> p.getWorld().dropItemNaturally(p.getLocation(), leftover));
         }
-        p.sendMessage("§aTrikot-Prototyp erhalten! §7Bordeaux-Lederrüstung; das 3D-Resourcepack folgt separat.");
+        p.sendMessage("§aTrikot erhalten! §7Für das Muster BasketballCraft-Jerseys.zip als Resourcepack aktivieren. §cPack verändert aktuell ALLE Lederrüstungen.");
     }
     private void showHoopOnce(Player p, String side) {
         Location loc = hoops.get(side);
@@ -278,8 +323,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.2 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
-            sender.sendMessage("§7Ball aufnehmen: Nähe oder Rechtsklick. §fLinksklick: Wurf §7| §fShift+Linksklick: Pass");
+            sender.sendMessage("§6§lBasketballCraft v0.3 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
+            sender.sendMessage("§7Ball aufnehmen: Nähe oder Rechtsklick. §fLinksklick: Laden/Release §7| §fShift+Linksklick: Pass");
             return true;
         }
         if (args[0].equalsIgnoreCase("score")) {
