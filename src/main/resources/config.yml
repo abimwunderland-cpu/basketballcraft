@@ -4,18 +4,12 @@ physics:
   bounce: 0.67
   floor-friction: 0.78
   shoot-speed: 1.16
-  pass-speed: 0.87
   pickup-radius: 1.4
 court:
   three-point-distance: 8.0
-
-# Shooting: First left-click starts the meter; second left-click releases.
-# Green window: ticks 23-30 of a repeating 44-tick meter.
-
 shooting:
-  assist-max-angle-degrees: 48.0
+  assist-max-angle-degrees: 12.0
   max-distance: 22.0
-
 passing:
   speed: 1.10
   assist-range: 16.0
@@ -23,3 +17,14 @@ passing:
   catch-radius: 1.05
   pickup-lock-ticks: 12
   cooldown-ticks: 8
+stamina:
+  sprint-per-second: 5.0
+  sprint-with-ball-per-second: 9.0
+  walk-regen-per-second: 3.0
+  idle-regen-per-second: 6.0
+  pass-cost: 2.0
+  shot-cost: 5.0
+dunk:
+  cost: 35.0
+  max-distance: 3.5
+  max-angle-degrees: 38.0

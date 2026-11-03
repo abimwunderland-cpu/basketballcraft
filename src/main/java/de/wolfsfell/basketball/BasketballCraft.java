@@ -44,6 +44,15 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private int intendedReceiverUntil;
     private boolean passFlight;
     private final Map<UUID, Integer> passCooldown = new HashMap<>();
+    private final Map<UUID, Double> stamina = new HashMap<>();
+    private final Map<UUID, Integer> sprintUnlock = new HashMap<>();
+    private final Map<UUID, Integer> jumpWindow = new HashMap<>();
+    private final Map<UUID, Boolean> grounded = new HashMap<>();
+    private final Map<UUID, Integer> sprintRecent = new HashMap<>();
+    private UUID dunker;
+    private String dunkSide;
+    private int dunkEnds;
+    private int dunkReadyTick;
     private static final int SHOT_CYCLE = 44;
     private static final int GREEN_START = 23;
     private static final int GREEN_END = 30;
@@ -62,12 +71,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             scores.put(side, 0);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.7 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.8 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
-        charging.clear(); chargeTicks.clear();
+        charging.clear(); chargeTicks.clear(); stamina.clear();
     }
     private double setting(String name, double fallback) { return getConfig().getDouble("physics." + name, fallback); }
     private ItemStack ballItem() {
@@ -97,6 +106,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         velocity.zero(); airborne = false; scoredThisFlight = false; lastShooter = null; shotOrigin = null; charging.clear(); chargeTicks.clear(); pickupLockedPlayer = null; intendedReceiver = null; passFlight = false;
     }
     private void clearBall() {
+        dunker = null; dunkSide = null;
 
         carrier = null; charging.clear(); chargeTicks.clear();
         if (display != null && display.isValid()) display.remove();
@@ -108,7 +118,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         carrier = p.getUniqueId();
         airborne = false; velocity.zero(); passFlight = false; intendedReceiver = null;
         charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
-        p.sendActionBar("§d🏀 Ballbesitz §7| §fLinksklick: Wurf §7| §fRechtsklick: Smart-Pass §7| §fShift+Rechtsklick: Ablegen");
+        p.sendActionBar("§d🏀 Ballbesitz §7| §fLinksklick: Wurf §7| §fRechtsklick: Smart-Pass §7| §fShift+Rechtsklick: Ablegen §7| §dSprint+Sprung+Linksklick: Dunk");
         p.playSound(p, Sound.BLOCK_NOTE_BLOCK_HAT, 0.6f, 1.2f);
     }
     private void startCharge(Player p) {
@@ -137,9 +147,52 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         }
         return best;
     }
+    private double energy(Player p) { return stamina.getOrDefault(p.getUniqueId(), 100.0); }
+    private boolean spend(Player p, double cost) {
+        if (energy(p) < cost) { p.sendActionBar("§cZu wenig Ausdauer!"); return false; }
+        stamina.put(p.getUniqueId(), energy(p) - cost); return true;
+    }
+    private boolean attemptDunk(Player p) {
+        if (!p.getUniqueId().equals(carrier) || dunker != null) return false;
+        if (tick > jumpWindow.getOrDefault(p.getUniqueId(), -100) ||
+                tick > sprintRecent.getOrDefault(p.getUniqueId(), -100) + 12 || energy(p) < 70) return false;
+        Location chosen = null; String side = null;
+        Vector forward = p.getLocation().getDirection().setY(0);
+        if (forward.lengthSquared() < 0.01) return false;
+        forward.normalize();
+        double best = Double.MAX_VALUE;
+        for (var entry : hoops.entrySet()) {
+            Location hoop = entry.getValue();
+            if (!p.getWorld().equals(hoop.getWorld())) continue;
+            Vector delta = hoop.toVector().subtract(p.getLocation().toVector()).setY(0);
+            double distance = delta.length();
+            if (distance < 0.6 || distance > getConfig().getDouble("dunk.max-distance", 3.5)) continue;
+            double angle = Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, forward.dot(delta.clone().normalize())))));
+            if (angle > getConfig().getDouble("dunk.max-angle-degrees", 38)) continue;
+            if (distance < best) { best = distance; chosen = hoop; side = entry.getKey(); }
+        }
+        if (chosen == null) return false;
+        if (!spend(p, getConfig().getDouble("dunk.cost", 35))) return false;
+        dunker = p.getUniqueId(); dunkSide = side;
+        dunkEnds = tick + 28; dunkReadyTick = tick + 5;
+        charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
+        // Accelerate toward the hoop, and lift enough to reach the ring.
+        Vector toward = chosen.toVector().subtract(p.getLocation().toVector()).setY(0);
+        double horizontal = Math.min(0.39, Math.max(0.12, toward.length() / 13.0));
+        toward.normalize().multiply(horizontal);
+        double height = chosen.getY() - p.getLocation().getY();
+        double vertical = Math.max(0.66, Math.min(0.96, 0.53 + height * 0.072));
+        p.setVelocity(new Vector(toward.getX(), vertical, toward.getZ()));
+        p.setFallDistance(0);
+        p.getWorld().playSound(p.getLocation(), Sound.ENTITY_BAT_TAKEOFF, 1f, 0.75f);
+        p.sendTitle("§d§lDUNK!", "§7Zum Ring!", 0, 10, 4);
+        return true;
+    }
     private void release(Player p, boolean pass) {
         if (!p.getUniqueId().equals(carrier)) return;
+        if (dunker != null) return;
         if (pass && tick < passCooldown.getOrDefault(p.getUniqueId(), 0)) return;
+        if (!spend(p, pass ? getConfig().getDouble("stamina.pass-cost", 2) : getConfig().getDouble("stamina.shot-cost", 5))) return;
         int held = chargeTicks.getOrDefault(p.getUniqueId(), 0);
         charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
         carrier = null;
@@ -176,7 +229,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             // Find a target using horizontal facing: players should aim at the hoop,
             // not above the hoop. This is important for shots from ground level.
             Location target = null;
-            double bestAngle = getConfig().getDouble("shooting.assist-max-angle-degrees", 48.0);
+            double bestAngle = Math.min(12.0, getConfig().getDouble("shooting.assist-max-angle-degrees", 12.0));
             Vector flatLook = direction.clone().setY(0);
             if (flatLook.lengthSquared() > 0.001) {
                 flatLook.normalize();
@@ -190,6 +243,15 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                 }
             }
             if (target != null) {
+                // Green release improves timing, but camera alignment still matters.
+                // Offset the target sideways in proportion to the player's horizontal aim error.
+                Vector toHoop = target.toVector().subtract(ball.toVector()).setY(0);
+                Vector horizontalAim = direction.clone().setY(0).normalize();
+                double signed = toHoop.clone().normalize().getX() * horizontalAim.getZ()
+                        - toHoop.clone().normalize().getZ() * horizontalAim.getX();
+                double distanceToHoop = toHoop.length();
+                Vector lateral = new Vector(-toHoop.getZ(), 0, toHoop.getX()).normalize();
+                target = target.clone().add(lateral.multiply(Math.max(-2.0, Math.min(2.0, signed * distanceToHoop * 0.65))));
                 // Simulate the same discrete gravity and drag as step(), solving
                 // for a DESCENDING crossing of the hoop plane. Never require the
                 // player to stand above the hoop.
@@ -245,19 +307,22 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         if (p.getUniqueId().equals(carrier)) {
             if (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK) {
                 event.setCancelled(true);
+                if (dunker != null && dunker.equals(p.getUniqueId())) return;
+                if (attemptDunk(p)) return;
                 if (charging.containsKey(p.getUniqueId())) release(p, false);
                 else startCharge(p);
                 return;
             }
             if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK) {
                 event.setCancelled(true);
+                if (dunker != null && dunker.equals(p.getUniqueId())) return;
                 if (p.isSneaking()) placeBall(p);
                 else release(p, true);
                 return;
             }
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); stamina.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             dropCarrier(event.getEntity());
@@ -272,6 +337,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         }
     }
     private void dropCarrier(Player p) {
+        if (p.getUniqueId().equals(dunker)) { dunker = null; dunkSide = null; }
         if (!p.getUniqueId().equals(carrier)) return;
         carrier = null; charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
         if (ball != null) {
@@ -281,6 +347,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     private void step() {
         tick++;
+        updateStamina();
+        updateDunk();
         for (UUID id : new ArrayList<>(charging.keySet())) {
             Player player = Bukkit.getPlayer(id);
             if (player == null || !id.equals(carrier)) { charging.remove(id); chargeTicks.remove(id); continue; }
@@ -308,8 +376,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
             double rhythm = p.isSprinting() ? 0.85 : moving ? 0.60 : 0.33;
             double height = 0.32 + Math.abs(Math.sin(tick * rhythm)) * 0.58;
-            ball = p.getLocation().add(right.multiply(0.67)).add(forward.multiply(0.12)).add(0, height, 0);
-            if (tick % (p.isSprinting() ? 7 : moving ? 10 : 17) == 0)
+            // Keep the ball visible in first person: in front and slightly to the right.
+            if (p.getUniqueId().equals(dunker)) {
+                ball = p.getLocation().add(forward.multiply(0.48)).add(0, 1.25, 0);
+            } else {
+                ball = p.getLocation().add(right.multiply(0.32)).add(forward.multiply(0.72)).add(0, height, 0);
+            }
+            if (!p.getUniqueId().equals(dunker) && tick % (p.isSprinting() ? 7 : moving ? 10 : 17) == 0)
                 p.getWorld().playSound(p.getLocation(), Sound.BLOCK_WOOD_HIT, 0.22f, 0.6f);
             display.teleport(ball);
             return;
@@ -381,6 +454,71 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             }
         }
     }
+    private void updateStamina() {
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            UUID id = p.getUniqueId();
+            boolean onGround = p.isOnGround();
+            boolean wasGrounded = grounded.getOrDefault(id, onGround);
+            if (wasGrounded && !onGround && p.getVelocity().getY() > 0.08) jumpWindow.put(id, tick + 12);
+            grounded.put(id, onGround);
+            if (p.isSprinting()) sprintRecent.put(id, tick);
+            double value = energy(p);
+            boolean sprinting = p.isSprinting();
+            if (sprinting && value <= 0.1) {
+                p.setSprinting(false);
+                sprintUnlock.put(id, 25);
+                sprinting = false;
+            }
+            if (sprintUnlock.containsKey(id) && value < sprintUnlock.get(id)) {
+                if (p.isSprinting()) p.setSprinting(false);
+                sprinting = false;
+            } else sprintUnlock.remove(id);
+            if (sprinting) value -= (id.equals(carrier) ? getConfig().getDouble("stamina.sprint-with-ball-per-second", 9)
+                    : getConfig().getDouble("stamina.sprint-per-second", 5)) / 20.0;
+            else {
+                boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
+                value += (moving ? getConfig().getDouble("stamina.walk-regen-per-second", 3)
+                    : getConfig().getDouble("stamina.idle-regen-per-second", 6)) / 20.0;
+            }
+            value = Math.max(0, Math.min(100, value));
+            stamina.put(id, value);
+            if (tick % 10 == 0 && !charging.containsKey(id)) {
+                int bars = (int)Math.round(value / 10.0);
+                StringBuilder bar = new StringBuilder("§d⚡ §7[");
+                for (int i = 0; i < 10; i++) bar.append(i < bars ? (value < 25 ? "§c▌" : "§d▌") : "§8▌");
+                bar.append("§7] §f").append((int)Math.round(value)).append("/100");
+                if (id.equals(carrier)) bar.append(" §7| §d🏀");
+                p.sendActionBar(bar.toString());
+            }
+        }
+    }
+    private void updateDunk() {
+        if (dunker == null) return;
+        Player p = Bukkit.getPlayer(dunker);
+        Location hoop = dunkSide == null ? null : hoops.get(dunkSide);
+        if (p == null || !p.isOnline() || hoop == null || !p.getWorld().equals(hoop.getWorld()) ||
+                !dunker.equals(carrier)) { dunker = null; dunkSide = null; return; }
+        p.setFallDistance(0);
+        double dx = p.getLocation().getX() - hoop.getX();
+        double dz = p.getLocation().getZ() - hoop.getZ();
+        double distance = Math.hypot(dx, dz);
+        // The player's reach is roughly 2 blocks above their feet.
+        if (tick >= dunkReadyTick && distance <= 1.55 &&
+                p.getLocation().getY() + 2.15 >= hoop.getY() && p.getLocation().getY() <= hoop.getY() + 0.4) {
+            lastShooter = p.getUniqueId(); shotOrigin = p.getLocation().clone();
+            // Dunk is worth two, regardless of the starting distance.
+            scores.merge(dunkSide, 2, Integer::sum);
+            Bukkit.broadcastMessage("§d§l🏀 DUNK! §f" + p.getName() + " §7(+2) §cROT " + scores.get("red") + " §7- §9" + scores.get("blue") + " BLAU");
+            hoop.getWorld().playSound(hoop, Sound.ENTITY_PLAYER_LEVELUP, 1.2f, 0.7f);
+            hoop.getWorld().spawnParticle(Particle.CRIT, hoop, 24, 0.5, 0.2, 0.5, 0.1);
+            dunker = null; dunkSide = null;
+            spawnBall(hoop.clone().add(0, -1.8, 0));
+        } else if (tick > dunkEnds || (p.isOnGround() && tick > dunkReadyTick + 3)) {
+            p.sendActionBar("§cDunk verfehlt!");
+            dunker = null; dunkSide = null;
+        }
+    }
+    @EventHandler public void onJoin(PlayerJoinEvent event) { stamina.put(event.getPlayer().getUniqueId(), 100.0); }
     private void drawHoops() {
         for (Player viewer : Bukkit.getOnlinePlayers()) {
             if (!hoopViewers.contains(viewer.getUniqueId())) continue;
@@ -418,8 +556,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.7 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc start, /bc reset, /bc score");
-            sender.sendMessage("§7Ball aufnehmen: Nähe. §fLinksklick: Laden/Release §7| §fRechtsklick: Smart-Pass §7| §fShift+Rechtsklick: Ablegen");
+            sender.sendMessage("§6§lBasketballCraft v0.8 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc start, /bc reset, /bc score");
+            sender.sendMessage("§7Ball aufnehmen: Nähe. §fLinksklick: Laden/Release §7| §fRechtsklick: Smart-Pass §7| §fShift+Rechtsklick: Ablegen §7| §dSprint+Sprung+Linksklick: Dunk");
             return true;
         }
         if (args[0].equalsIgnoreCase("score")) {

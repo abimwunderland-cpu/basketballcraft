@@ -1,22 +1,21 @@
-# BasketballCraft V0.7 (Paper 1.21.11)
+# BasketballCraft v0.8 (Paper 1.21.11)
 
-**Gameplay test build**. Source based on V0.6; original shooting and hoop detection retained. Jerseys removed.
+## Neu
+- Ausdauer (100 Punkte), Sprintverbrauch, Regeneration, Sprint-Sperre bis 25 Punkte
+- Manueller Dunk: Sprinten, springen, innerhalb 12 Ticks Linksklick in Korbnähe (max. 3,5 Blöcke, max. 38°); mindestens 70 Ausdauer. Dunk kostet 35, zählt 2 Punkte.
+- Ball beim Dribbeln weiter vorn und näher zur Mitte
+- Zielhilfe auf maximal 12° begrenzt; selbst Green Release korrigiert falsches Zielen nicht vollständig
+- V0.7 Smart-Pass, Pickup und Wurfmeter bleiben erhalten; keine Jerseys
 
 ## Installation
-1. Upload repository contents to GitHub (including `.github/workflows/build.yml`).
-2. GitHub Actions > Build BasketballCraft > Run workflow, download JAR from Artifacts.
-3. Stop server, remove old BasketballCraft JAR, install new JAR, restart.
-4. Install `BasketballCraft-v0.7-Resourcepack.zip` in client resourcepacks, enable and F3+T.
-5. `/bc ball` creates a single ball; `/bc sethoop red|blue` marks hoop center; `/bc showhoops` shows hoop regions.
+1. ZIP-Inhalt ins GitHub-Repository hochladen, GitHub Actions `Build BasketballCraft` ausführen.
+2. `basketballcraft-0.8.0.jar` aus dem Action-Artefakt in den plugins-Ordner kopieren. Alte Version entfernen.
+3. Resourcepack-ZIP clientseitig aktivieren.
+4. Server neu starten. `/bc ball`, `/bc sethoop red|blue`, `/bc showhoops`.
 
-## Controls
-- Walk into free ball to take possession.
-- With possession: left click to start shooting meter, left click again to release.
-- Right click: Smart Pass (aim within 12 degrees of another player within 16 blocks, else free pass).
-- Sneak + right click: put ball down.
-- Dribbling is automatic and displayed to the player's right.
-- Passing ball can be intercepted. Pickup lock 12 ticks prevents immediate recapture by passer.
-
-**Note:** No Q-to-drop support because the ball is not an inventory item. Sneak + right click is the drop action.
-**Note:** Until teams are added, smart targeting may select an opponent in the crosshair; it does not know teams.
-**Note:** This version has not been tested inside a Minecraft server; use GitHub Actions to validate compilation.
+## Testhinweise
+- Die Dunk-Animation ist eine kontrollierte Velocity-Bewegung, kein Teleport. Minecraft-Kollisionen können Dunks verhindern.
+- Die Dunk-Erkennung nutzt die markierte Ringmitte. Hoops müssen exakt gesetzt sein.
+- Falls eine ältere `plugins/BasketballCraft/config.yml` existiert, neue Werte manuell übernehmen oder vor Neustart sichern und neu generieren lassen. Die Zielhilfe wird im Code auf 12° begrenzt.
+- Wurfphysik ist aus v0.7 übernommen; Trefferverhalten und Sprungimpuls bitte auf der eigenen Map testen.
+- Das Ballmodell ist weiterhin das bisherige V0.7-Modell, nicht neu designt.
