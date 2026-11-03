@@ -34,7 +34,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private BukkitTask ticker;
     private int tick;
     private final Set<UUID> hoopViewers = new HashSet<>();
-    private final double hoopRadius = 0.55;
+    private final double hoopRadius = 0.78;
     private final Map<UUID, Long> charging = new HashMap<>();
     private final Map<UUID, Integer> chargeTicks = new HashMap<>();
     private static final int SHOT_CYCLE = 44;
@@ -55,7 +55,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             scores.put(side, 0);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.4 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.5 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
@@ -141,6 +141,31 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             }
             velocity = direction.multiply(strength);
             velocity.setY(velocity.getY() + 0.13 + 0.07 * charge);
+            // Skill-assisted arc: only when the camera is pointing toward a hoop.
+            // A timed green release reduces lateral error; it does not guarantee a basket.
+            Location target = null;
+            double bestAngle = getConfig().getDouble("shooting.assist-max-angle-degrees", 28.0);
+            for (Location hoop : hoops.values()) {
+                if (!hoop.getWorld().equals(p.getWorld())) continue;
+                Vector toHoop = hoop.toVector().subtract(ball.toVector());
+                if (toHoop.lengthSquared() < 1 || toHoop.lengthSquared() > 22 * 22) continue;
+                double angle = Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, direction.dot(toHoop.normalize())))));
+                if (angle < bestAngle) { bestAngle = angle; target = hoop; }
+            }
+            if (target != null) {
+                Vector horizontal = target.toVector().subtract(ball.toVector()).setY(0);
+                double distance = horizontal.length();
+                double flightTicks = Math.max(12.0, Math.min(34.0, distance / 0.38 + 7));
+                // Solve ballistic path for descending arrival at hoop height.
+                double g = setting("gravity", 0.045);
+                double vy = (target.getY() - ball.getY() + 0.5 * g * flightTicks * flightTicks) / flightTicks;
+                Vector aimed = horizontal.multiply(1.0 / flightTicks);
+                aimed.setY(vy);
+                // Slight error outside green window, amplified by distance.
+                double error = green ? 0.015 : 0.07 + Math.abs(phase - 26) * 0.007;
+                aimed.add(new Vector((Math.random() - 0.5) * error, 0, (Math.random() - 0.5) * error));
+                velocity = aimed;
+            }
             p.sendTitle(green ? "§a§lGREEN!" : "§6RELEASE", green ? "§7Perfektes Timing" : "§7Timing: " + phase + "/" + SHOT_CYCLE, 0, 13, 5);
             p.playSound(p, green ? Sound.ENTITY_EXPERIENCE_ORB_PICKUP : Sound.ENTITY_SNOWBALL_THROW, 0.9f, green ? 1.5f : 0.8f);
         }
@@ -299,17 +324,23 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             for (java.lang.reflect.Method m : meta.getClass().getMethods()) {
                 if (m.getName().equals("setEquippable") && m.getParameterCount() == 1) { m.invoke(meta, equipment); break; }
             }
-        } catch (ReflectiveOperationException ex) { getLogger().warning("Equipment-Modell konnte nicht gesetzt werden: " + ex.getMessage()); }
+        } catch (ReflectiveOperationException | RuntimeException ex) { getLogger().severe("Jersey equipment model FAILED: " + ex); }
         item.setItemMeta(meta);
         return item;
     }
     private void giveJersey(Player p) {
         ItemStack chest = jerseyPiece(Material.LEATHER_CHESTPLATE, "§6WOLFSFELL §7| §5Basketball-Trikot [Pack]");
         ItemStack legs = jerseyPiece(Material.LEATHER_LEGGINGS, "§6WOLFSFELL §7| §5Basketball-Shorts [Pack]");
-        for (ItemStack item : List.of(chest, legs)) {
-            p.getInventory().addItem(item).values().forEach(leftover -> p.getWorld().dropItemNaturally(p.getLocation(), leftover));
+        // Equip directly into the correct armor slots; return previous armor safely.
+        ItemStack oldChest = p.getInventory().getChestplate();
+        ItemStack oldLegs = p.getInventory().getLeggings();
+        p.getInventory().setChestplate(chest);
+        p.getInventory().setLeggings(legs);
+        for (ItemStack old : List.of(oldChest == null ? new ItemStack(Material.AIR) : oldChest,
+                                   oldLegs == null ? new ItemStack(Material.AIR) : oldLegs)) {
+            if (old.getType() != Material.AIR) p.getInventory().addItem(old).values().forEach(leftover -> p.getWorld().dropItemNaturally(p.getLocation(), leftover));
         }
-        p.sendMessage("§aTrikot erhalten! §7Für das Muster BasketballCraft-Jerseys.zip als Resourcepack aktivieren. §aPack nutzt eigene Equipment-Texturen.");
+        p.sendMessage("§aJersey und Shorts direkt angezogen! §7Resourcepack V0.5 aktivieren. §eWenn nur Leder angezeigt wird: Equipment-Komponente im Serverlog prüfen.");
     }
     private void showHoopOnce(Player p, String side) {
         Location loc = hoops.get(side);
@@ -331,7 +362,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.4 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
+            sender.sendMessage("§6§lBasketballCraft v0.5 §7| /bc ball, /bc sethoop red|blue, /bc showhoops, /bc jersey, /bc start, /bc reset, /bc score");
             sender.sendMessage("§7Ball aufnehmen: Nähe oder Rechtsklick. §fLinksklick: Laden/Release §7| §fShift+Linksklick: Pass");
             return true;
         }

@@ -11,3 +11,6 @@ court:
 
 # Shooting: First left-click starts the meter; second left-click releases.
 # Green window: ticks 23-30 of a repeating 44-tick meter.
+
+shooting:
+  assist-max-angle-degrees: 28.0

@@ -1,13 +1,11 @@
-# BasketballCraft v0.4 - Asset Update (Paper 1.21.11)
+# BasketballCraft V0.5 — test build
 
-This update preserves v0.3 shooting and hoop physics.
-- Ball item and ItemDisplay now use the custom item model `basketballcraft:basketball`.
-- /bc jersey gives leather armor with the custom equipment asset `basketballcraft:wolfsfell`.
-- Resourcepack is required on every player's client. No client mod required.
-- Pack format inherited from v0.3.1; check the game compatibility warning on 1.21.11.
-- The ball is an original voxel recreation based on common basketball design, not a downloaded third-party asset.
-- Armor is custom equipment texture on vanilla geometry, NOT animated 3D armor geometry.
-- Back lettering is simplified because vanilla armor UV texture resolution is tiny.
-- Previous shooting input remains two left clicks, not click-and-hold.
+Paper 1.21.11 / Java 21. Build: GitHub Actions or `mvn clean package`.
 
-Installation: replace repo with source ZIP, build via GitHub Actions, replace old plugin JAR, enable resourcepack ZIP at highest priority, F3+T.
+- `/bc ball` creates the ball; left click starts meter, second left click releases.
+- `/bc sethoop red|blue` saves rim center at eye position; `/bc showhoops` displays scoring rings.
+- Shots aimed within 28 degrees of a configured hoop receive a physically simulated arc; the shot can still miss.
+- `/bc jersey` EQUIPS the chestplate and leggings into the armor slots, returning old armor to inventory.
+- Use accompanying V0.5 resourcepack ZIP in Minecraft resourcepacks; place above other packs.
+
+**Limitations:** This is a beta. Hoop detection still requires a downward crossing of the rim plane, and the custom armor uses vanilla armor geometry, not articulated 3D clothing. The aiming assist is an approximation, not guaranteed physics. Actual in-game test required.
