@@ -1,29 +1,17 @@
-# BasketballCraft v0.8.3 — Court Editor & Team Spawns
+# BasketballCraft v0.8.5 — Ausdauer-Stop
 
-Paper 1.21.11 / Java 21. Source package with GitHub Actions build.
+Basis: v0.8.4. Keine Änderungen am Resourcepack, Court-Editor, Körben oder Dreierlinien.
 
-## Setup
-1. `/bc setup` and select Arena Ecke 1, right-click a block with the editor wand.
-2. Open `/bc setup` again and select Arena Ecke 2, right-click the opposite corner.
-3. Only now run `/bc arena save <name>` (never auto-saved on a single click).
-4. In `/bc setup`, choose Team 1 or Team 2 spawn; right-click a block to add one. Repeat for as many player spawns as needed. Shift-right-click removes the last spawn for that team.
-5. `/bc spawn add 1` or `/bc spawn add 2` adds a spawn at your exact feet and look direction (recommended).
-6. `/bc spawn ball` saves the ball spawn at your feet. `/bc spawn show` previews particles.
-7. `/bc spawn list`, `/bc spawn remove 1 2`, `/bc spawn clear 2`.
-8. `/bc help` shows in-game command reference.
+- Bei 0 Ausdauer: horizontale Bewegung wird blockiert (Blickrichtung und vertikale Bewegung bleiben möglich).
+- Solange der Spieler weiter versucht zu laufen, regeneriert die Ausdauer nicht.
+- Erst nach Stillstand beginnt die Regeneration; bei 30 Ausdauer wird die Bewegung wieder freigegeben.
+- Sprint bleibt während der Erschöpfung gesperrt.
+- Im normalen Betrieb bleiben die bisherigen Stamina-Raten erhalten.
 
-Team spawn positions are persisted in config.yml, including yaw and pitch. Existing hoops and 3pt lines are unchanged. These markers configure positions; automatic team assignment / match starts are not implemented in this release.
+## Installation
+ZIP ins GitHub-Repository hochladen und GitHub Actions ausführen. Die JAR aus dem Actions-Artefakt auf dem Paper-1.21.11-Server installieren. Kein neues Resourcepack nötig.
 
-## Build
-Push source to GitHub; Actions workflow builds the JAR. Local: `mvn package`. Java 21 and Paper 1.21.11 API required.
+## Test
+Sprinten bis 0 -> Weiterlaufen versuchen (keine Bewegung/Regeneration) -> Bewegungstasten loslassen (Regeneration) -> ab 30 wieder laufen.
 
-## Verification
-Archive and source changes prepared, but Java compilation against the Paper API and live gameplay were not verified in this environment. Test on a backup server before replacing production. No new resourcepack required.
-
-## v0.8.4 — stamina balancing only
-- Sprint lock at 0 stamina, unlock at 30.
-- Speed reduction begins under 40, becomes stronger under 15.
-- Walking restores 2 stamina/sec, standing 7 stamina/sec; carrying ball reduces both to 60%.
-- Sprint cost increases by 50% below 40 stamina.
-- All court, hoop, shot and spawn systems unchanged.
-- Existing resourcepack remains compatible.
+**Hinweis:** Java-Build und Ingame-Test wurden hier nicht ausgeführt.

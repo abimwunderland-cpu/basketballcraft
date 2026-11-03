@@ -49,6 +49,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Map<UUID, Integer> passCooldown = new HashMap<>();
     private final Map<UUID, Double> stamina = new HashMap<>();
     private final Map<UUID, Integer> sprintUnlock = new HashMap<>();
+    private final Map<UUID, Integer> exhaustedMoveAttempt = new HashMap<>();
     private final Map<UUID, Integer> jumpWindow = new HashMap<>();
     private final Map<UUID, Boolean> grounded = new HashMap<>();
     private final Map<UUID, Integer> sprintRecent = new HashMap<>();
@@ -437,7 +438,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             dropCarrier(event.getEntity());
@@ -584,6 +585,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             boolean exhausted = sprintUnlock.containsKey(id);
             if (exhausted && value >= 30.0) {
                 sprintUnlock.remove(id);
+                exhaustedMoveAttempt.remove(id);
                 exhausted = false;
             }
             boolean sprinting = p.isSprinting() && !exhausted;
@@ -596,8 +598,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 if (value < 40.0) drain *= 1.5;
                 value -= drain / 20.0;
             } else {
+                // At zero, recovery only starts after the player has stopped TRYING to move.
+                // PlayerMoveEvent cancels horizontal movement and records attempted movement.
+                boolean recoveryBlocked = exhausted && value < 30.0
+                    && tick - exhaustedMoveAttempt.getOrDefault(id, -10000) <= 2;
                 boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
-                double regen = moving
+                double regen = recoveryBlocked ? 0.0 : moving
                     ? getConfig().getDouble("stamina.walk-regen-per-second", 2.0)
                     : getConfig().getDouble("stamina.idle-regen-per-second", 7.0);
                 if (id.equals(carrier)) regen *= getConfig().getDouble("stamina.ball-regen-multiplier", 0.6);
@@ -606,6 +612,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             value = Math.max(0.0, Math.min(100.0, value));
             if (value <= 0.01) {
                 value = 0.0;
+                if (!exhausted) exhaustedMoveAttempt.put(id, tick);
                 sprintUnlock.put(id, 30);
                 exhausted = true;
                 p.setSprinting(false);
@@ -626,7 +633,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 StringBuilder bar = new StringBuilder("§d⚡ §7[");
                 for (int i = 0; i < 10; i++) bar.append(i < bars ? (value < 25 ? "§c▌" : "§d▌") : "§8▌");
                 bar.append("§7] §f").append((int)Math.round(value)).append("/100");
-                if (exhausted) bar.append(" §cSPRINT GESPERRT");
+                if (exhausted) bar.append(" §cSTEH BLEIBEN / ERHOLEN");
                 if (id.equals(carrier)) bar.append(" §7| §d🏀");
                 p.sendActionBar(bar.toString());
             }
@@ -635,6 +642,25 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private void restoreSpeed(Player p) {
         Float original = baseWalkSpeed.remove(p.getUniqueId());
         if (original != null && p.isOnline()) p.setWalkSpeed(original);
+    }
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onExhaustedMove(PlayerMoveEvent e) {
+        Player p = e.getPlayer();
+        UUID id = p.getUniqueId();
+        if (!sprintUnlock.containsKey(id) || energy(p) >= 30.0 || e.getTo() == null) return;
+        Location from = e.getFrom();
+        Location to = e.getTo();
+        double dx = to.getX() - from.getX();
+        double dz = to.getZ() - from.getZ();
+        // Preserve looking around and vertical motion, but disallow horizontal walking.
+        if (dx * dx + dz * dz < 0.000001) return;
+        exhaustedMoveAttempt.put(id, tick);
+        Location restricted = to.clone();
+        restricted.setX(from.getX());
+        restricted.setZ(from.getZ());
+        e.setTo(restricted);
+        Vector v = p.getVelocity();
+        p.setVelocity(new Vector(0, v.getY(), 0));
     }
     @EventHandler public void onSprint(PlayerToggleSprintEvent e) {
         if (e.isSprinting() && sprintUnlock.containsKey(e.getPlayer().getUniqueId()) && energy(e.getPlayer()) < 30.0) {
