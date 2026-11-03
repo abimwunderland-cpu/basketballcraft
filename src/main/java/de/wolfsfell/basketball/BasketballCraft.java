@@ -23,7 +23,7 @@ import org.joml.AxisAngle4f;
 import org.joml.Vector3f;
 import java.util.*;
 
-public final class BasketballCraft extends JavaPlugin implements Listener, CommandExecutor {
+public final class BasketballCraft extends JavaPlugin implements Listener, TabExecutor {
     private NamespacedKey key;
     private ItemDisplay display;
     private Location ball;
@@ -62,18 +62,22 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private final Map<UUID, Location> arenaPos2 = new HashMap<>();
     private final Map<String, Location[]> arenas = new HashMap<>();
     private String activeArena = null;
+    private final Map<String, List<Location>> threeLines = new HashMap<>();
+    private final Map<UUID, String> editMode = new HashMap<>();
+    private final Map<UUID, org.bukkit.inventory.Inventory> setupInventories = new HashMap<>();
+    private final Map<UUID, Float> baseWalkSpeed = new HashMap<>();
     private final NamespacedKey wandKey = new NamespacedKey(this, "wand");
     private int greenWidth(Player p) {
         double e = energy(p);
-        return e >= 70 ? 8 : e >= 40 ? 6 : e >= 20 ? 5 : 4;
+        return e >= 70 ? 6 : e >= 40 ? 5 : e >= 20 ? 4 : 3;
     }
     private int greenStart(Player p) { return GREEN_CENTER - (greenWidth(p) - 1) / 2; }
     private int greenEnd(Player p) { return greenStart(p) + greenWidth(p) - 1; }
     private boolean green(Player p, int phase) { return phase >= greenStart(p) && phase <= greenEnd(p); }
     private ItemStack wand(String type) {
-        ItemStack item = new ItemStack(type.equals("arena") ? Material.WOODEN_AXE : type.equals("red") ? Material.BLAZE_ROD : Material.STICK);
+        ItemStack item = new ItemStack(type.equals("arena") ? Material.WOODEN_AXE : type.equals("red") ? Material.BLAZE_ROD : type.equals("blue") ? Material.STICK : Material.GOLDEN_HOE);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName(type.equals("arena") ? "§d§lHallen-Wand" : type.equals("red") ? "§c§lKorb Team 1" : "§9§lKorb Team 2");
+        meta.setDisplayName(type.equals("arena") ? "§d§lHallen-Wand" : type.equals("red") ? "§c§lKorb Team 1" : type.equals("blue") ? "§9§lKorb Team 2" : "§e§lCourt-Editor");
         meta.getPersistentDataContainer().set(wandKey, PersistentDataType.STRING, type);
         item.setItemMeta(meta); return item;
     }
@@ -111,6 +115,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         saveDefaultConfig();
         key = new NamespacedKey(this, "basketball");
         Objects.requireNonNull(getCommand("basketball")).setExecutor(this);
+        Objects.requireNonNull(getCommand("basketball")).setTabCompleter(this);
         Bukkit.getPluginManager().registerEvents(this, this);
         for (String side : List.of("red", "blue")) {
             String base = "hoops." + side;
@@ -129,13 +134,24 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                 arenas.put(name, new Location[]{new Location(w,a.get(0),a.get(1),a.get(2)),new Location(w,b.get(0),b.get(1),b.get(2))});
         }
         activeArena = getConfig().getString("active-arena");
+        for (String side : List.of("red", "blue")) {
+            List<Location> points = new ArrayList<>();
+            for (Map<?, ?> row : getConfig().getMapList("three-lines." + side)) {
+                World w = Bukkit.getWorld(String.valueOf(row.get("world")));
+                if (w == null) continue;
+                try { points.add(new Location(w, ((Number)row.get("x")).doubleValue(), ((Number)row.get("y")).doubleValue(), ((Number)row.get("z")).doubleValue())); }
+                catch (Exception ignored) { }
+            }
+            threeLines.put(side, points);
+        }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.8.1 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.8.2 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
         charging.clear(); chargeTicks.clear(); stamina.clear();
+        for (Player p : Bukkit.getOnlinePlayers()) restoreSpeed(p);
     }
     private double setting(String name, double fallback) { return getConfig().getDouble("physics." + name, fallback); }
     private ItemStack ballItem() {
@@ -337,7 +353,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             } else {
                 p.sendActionBar("§7Kein Korb im Blickfeld - freier Wurf");
             }
-            p.sendTitle(green ? "§a§lGREEN!" : "§6RELEASE", green ? "§7Perfektes Timing" : "§7Timing: " + phase + "/" + SHOT_CYCLE, 0, 13, 5);
+            p.sendActionBar(green ? "§aPerfektes Timing" : "§6Release");
             p.playSound(p, green ? Sound.ENTITY_EXPERIENCE_ORB_PICKUP : Sound.ENTITY_SNOWBALL_THROW, 0.9f, green ? 1.5f : 0.8f);
         }
         lastShooter = p.getUniqueId();
@@ -365,7 +381,10 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
             Block block = event.getClickedBlock();
             if (block == null) return;
-            if (wand.equals("arena")) {
+            if (wand.equals("editor")) {
+                if (action == Action.RIGHT_CLICK_BLOCK) editBlock(p, block, p.isSneaking());
+                else if (action == Action.LEFT_CLICK_BLOCK) openSetup(p);
+            } else if (wand.equals("arena")) {
                 if (action == Action.LEFT_CLICK_BLOCK) {
                     arenaPos1.put(p.getUniqueId(), block.getLocation());
                     p.sendMessage("§dHalle: Position 1 gesetzt: §f" + block.getX()+" "+block.getY()+" "+block.getZ());
@@ -381,7 +400,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                     // Marked block CENTER is the rim center, not the block corner.
                     Location center = block.getLocation().add(0.5, 0.5, 0.5);
                     saveHoop(wand, center); hoopViewers.add(p.getUniqueId());
-                    p.sendMessage("§aKorb " + wand + " gesetzt. §7/bc showhoops zeigt den Ring.");
+                    p.sendMessage("§aKorb " + wand + " gesetzt. §7Ringvorschau eingeschaltet!");
+                    drawHoops();
                 }
             }
             return;
@@ -404,7 +424,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             }
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); stamina.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             dropCarrier(event.getEntity());
@@ -440,9 +460,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             int filled = (int) Math.round(20.0 * phase / SHOT_CYCLE);
             StringBuilder meter = new StringBuilder("§6[");
             for (int i = 0; i < 20; i++) meter.append(i >= (int)(20.0 * greenFrom / SHOT_CYCLE) && i <= (int)(20.0 * greenTo / SHOT_CYCLE) ? "§a▌" : i < filled ? "§e▌" : "§8▌");
-            meter.append("§6] §7GREEN: ").append(greenWidth(player)).append(" Ticks §f| Klick: Release");
+            meter.append("§6] §7Klick: Release");
             player.sendActionBar(meter.toString());
-            if (phase == greenFrom) player.playSound(player, Sound.BLOCK_NOTE_BLOCK_PLING, 0.45f, 1.7f);
+            // No sound cue: players must time the visual meter themselves.
         }
         if (tick % 5 == 0) drawHoops();
         if (ball == null || display == null || !display.isValid()) return;
@@ -513,9 +533,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                 }
                 if (caught != null) { ball = next; carry(caught); return; }
             }
-            if (next.getBlock().getType().isSolid()) {
-                boolean floor = movement.getY() <= 0 && ball.clone().add(0, -0.12, 0).getBlock().getType().isSolid();
-                if (floor || (velocity.getY() < 0 && !ball.clone().add(0, -0.12, 0).getBlock().getType().isSolid())) {
+            if (next.getBlock().getType().isSolid() || (movement.getY() <= 0 && next.clone().add(0, -0.25, 0).getBlock().getType().isSolid())) {
+                boolean floor = movement.getY() <= 0 && ball.clone().add(0, -0.25, 0).getBlock().getType().isSolid();
+                if (floor || (velocity.getY() < 0 && !ball.clone().add(0, -0.25, 0).getBlock().getType().isSolid())) {
                     velocity.setY(Math.abs(velocity.getY()) * setting("bounce", 0.67));
                     velocity.setX(velocity.getX() * setting("floor-friction", 0.78));
                     velocity.setZ(velocity.getZ() * setting("floor-friction", 0.78));
@@ -528,7 +548,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             ball = next;
         }
         if (ball.getY() < ball.getWorld().getMinHeight() + 2) { spawnBall(ball.getWorld().getSpawnLocation().add(0, 1, 0)); return; }
-        if (velocity.lengthSquared() < 0.0009 && ball.clone().add(0, -0.16, 0).getBlock().getType().isSolid()) {
+        if (velocity.lengthSquared() < 0.0009 && ball.clone().add(0, -0.25, 0).getBlock().getType().isSolid()) {
             velocity.zero(); airborne = false;
         }
         display.teleport(ball);
@@ -566,7 +586,11 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
             }
             value = Math.max(0, Math.min(100, value));
             if (value <= 0.01) { sprintUnlock.put(id, 25); p.setSprinting(false); }
-            if (sprintUnlock.containsKey(id) && value < 25) p.setSprinting(false);
+            if (sprintUnlock.containsKey(id) && value < 25) {
+                p.setSprinting(false);
+                baseWalkSpeed.putIfAbsent(id, p.getWalkSpeed());
+                p.setWalkSpeed(Math.min(baseWalkSpeed.get(id), 0.13f));
+            } else restoreSpeed(p);
             stamina.put(id, value);
             if (tick % 10 == 0 && !charging.containsKey(id)) {
                 int bars = (int)Math.round(value / 10.0);
@@ -576,6 +600,15 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
                 if (id.equals(carrier)) bar.append(" §7| §d🏀");
                 p.sendActionBar(bar.toString());
             }
+        }
+    }
+    private void restoreSpeed(Player p) {
+        Float original = baseWalkSpeed.remove(p.getUniqueId());
+        if (original != null && p.isOnline()) p.setWalkSpeed(original);
+    }
+    @EventHandler public void onSprint(PlayerToggleSprintEvent e) {
+        if (e.isSprinting() && sprintUnlock.containsKey(e.getPlayer().getUniqueId()) && energy(e.getPlayer()) < 25) {
+            e.setCancelled(true); e.getPlayer().setSprinting(false);
         }
     }
     private void updateDunk() {
@@ -640,17 +673,124 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
     private void score(String side) {
         int points = 2;
         Location hoop = hoops.get(side);
-        if (shotOrigin != null && shotOrigin.getWorld().equals(hoop.getWorld()) && shotOrigin.distanceSquared(hoop) >= Math.pow(getConfig().getDouble("court.three-point-distance", 8.0), 2)) points = 3;
+        if (shotOrigin != null && hoop != null && shotOrigin.getWorld().equals(hoop.getWorld())) {
+            List<Location> line = threeLines.getOrDefault(side, List.of());
+            if (line.size() >= 3) {
+                double dx = shotOrigin.getX() - hoop.getX(), dz = shotOrigin.getZ() - hoop.getZ();
+                double playerDist = Math.hypot(dx, dz);
+                if (playerDist > 0.01) {
+                    double ux = dx / playerDist, uz = dz / playerDist;
+                    double boundary = Double.POSITIVE_INFINITY;
+                    for (int i = 0; i < line.size() - 1; i++) {
+                        Location a = line.get(i), b = line.get(i+1);
+                        if (!a.getWorld().equals(hoop.getWorld()) || !b.getWorld().equals(hoop.getWorld())) continue;
+                        double ax=a.getX()-hoop.getX(), az=a.getZ()-hoop.getZ();
+                        double sx=b.getX()-a.getX(), sz=b.getZ()-a.getZ();
+                        double det=ux*sz-uz*sx;
+                        if (Math.abs(det)<1e-8) continue;
+                        double t=(ax*sz-az*sx)/det, u=(ax*uz-az*ux)/det;
+                        if (t>0 && u>=0 && u<=1) boundary=Math.min(boundary,t);
+                    }
+                    if (Double.isFinite(boundary) && playerDist >= boundary - 0.01) points = 3;
+                }
+            } else if (shotOrigin.distanceSquared(hoop) >= Math.pow(getConfig().getDouble("court.three-point-distance", 8.0), 2)) points = 3;
+        }
         scores.merge(side, points, Integer::sum);
         String scorer = lastShooter == null ? "Unbekannt" : Optional.ofNullable(Bukkit.getOfflinePlayer(lastShooter).getName()).orElse("Spieler");
         Bukkit.broadcastMessage("§6§l🏀 KORB! §f" + scorer + " §7(" + points + " Punkte) §cROT " + scores.get("red") + " §7- §9" + scores.get("blue") + " BLAU");
         hoop.getWorld().playSound(hoop, Sound.ENTITY_PLAYER_LEVELUP, 1f, 1.2f);
         // Do not respawn or freeze the ball. Its downward velocity continues.
     }
+    private void saveThree(String side) {
+        List<Map<String,Object>> rows = new ArrayList<>();
+        for (Location l : threeLines.getOrDefault(side, List.of())) {
+            Map<String,Object> row = new HashMap<>();
+            row.put("world",l.getWorld().getName()); row.put("x",l.getX()); row.put("y",l.getY()); row.put("z",l.getZ()); rows.add(row);
+        }
+        getConfig().set("three-lines." + side, rows); saveConfig();
+    }
+    private void drawThree(Player p) {
+        for (String side : List.of("red","blue")) {
+            List<Location> points = threeLines.getOrDefault(side,List.of());
+            Particle.DustOptions dust = new Particle.DustOptions(side.equals("red") ? Color.RED : Color.AQUA, 1.1f);
+            for (int i=0;i<points.size();i++) {
+                Location a=points.get(i); if (!a.getWorld().equals(p.getWorld())) continue;
+                p.spawnParticle(Particle.DUST,a,10,.08,.08,.08,0,dust);
+                if (i+1>=points.size()) continue;
+                Location b=points.get(i+1); if (!b.getWorld().equals(a.getWorld())) continue;
+                Vector delta=b.toVector().subtract(a.toVector()); int n=Math.max(1,(int)(delta.length()*3));
+                for(int j=0;j<=n;j++) p.spawnParticle(Particle.DUST,a.clone().add(delta.clone().multiply(j/(double)n)),1,0,0,0,0,dust);
+            }
+        }
+    }
+    private void editBlock(Player p, Block block, boolean undo) {
+        String mode=editMode.getOrDefault(p.getUniqueId(),"arena1");
+        Location loc=block.getLocation();
+        if (mode.equals("arena1") || mode.equals("arena2")) {
+            (mode.equals("arena1") ? arenaPos1 : arenaPos2).put(p.getUniqueId(),loc);
+            p.sendMessage("§d"+mode+" §7gesetzt. §f/bc arena save <name>"); return;
+        }
+        if (mode.equals("red") || mode.equals("blue")) {
+            if (undo) { hoops.remove(mode); getConfig().set("hoops."+mode,null); saveConfig(); p.sendMessage("§eKorb entfernt."); }
+            else { saveHoop(mode,loc.add(.5,.5,.5)); hoopViewers.add(p.getUniqueId()); showHoopOnce(p,mode); drawHoops(); p.sendMessage("§aRing markiert! §7Partikel zeigen die Trefferzone."); }
+            return;
+        }
+        if (mode.equals("three-red") || mode.equals("three-blue")) {
+            String side=mode.substring(6); List<Location> line=threeLines.computeIfAbsent(side,k->new ArrayList<>());
+            if (undo) { if(!line.isEmpty())line.remove(line.size()-1); }
+            else { if (!line.isEmpty() && !line.get(0).getWorld().equals(loc.getWorld())) {p.sendMessage("§cAlle Linienpunkte müssen in derselben Welt sein.");return;} line.add(loc.add(.5,1.03,.5)); }
+            saveThree(side); drawThree(p); p.sendMessage("§aDreierlinie "+side+": §f"+line.size()+" Punkte §7(Shift+Rechtsklick: letzter Punkt zurück)");
+            return;
+        }
+        p.sendMessage("§cWähle erst einen Editor-Modus: /bc setup");
+    }
+    private void openSetup(Player p) {
+        org.bukkit.inventory.Inventory inv=Bukkit.createInventory(null,27,"BasketballCraft | Court Editor");
+        String[] modes={"arena1","arena2","red","blue","three-red","three-blue"};
+        String[] names={"§dHalle: Ecke 1","§dHalle: Ecke 2","§cKorb Team 1","§9Korb Team 2","§cDreierlinie Team 1","§9Dreierlinie Team 2"};
+        Material[] materials={Material.WOODEN_AXE,Material.WOODEN_AXE,Material.BLAZE_ROD,Material.STICK,Material.RED_DYE,Material.BLUE_DYE};
+        int[] slots={10,11,12,14,15,16};
+        for(int i=0;i<modes.length;i++) { ItemStack item=new ItemStack(materials[i]); ItemMeta meta=item.getItemMeta();meta.setDisplayName(names[i]);meta.setLore(List.of("§7Klicken zum Auswählen", "§7Danach Editor-Stab benutzen"));item.setItemMeta(meta);inv.setItem(slots[i],item); }
+        setupInventories.put(p.getUniqueId(),inv); p.openInventory(inv);
+    }
+    @EventHandler public void onSetupClick(InventoryClickEvent e) {
+        if (!(e.getWhoClicked() instanceof Player p)) return;
+        if (e.getView().getTopInventory()!=setupInventories.get(p.getUniqueId())) return;
+        e.setCancelled(true); if(e.getClickedInventory()!=e.getView().getTopInventory())return;
+        String mode=switch(e.getRawSlot()) {case 10->"arena1";case 11->"arena2";case 12->"red";case 14->"blue";case 15->"three-red";case 16->"three-blue";default->null;};
+        if(mode==null)return;
+        editMode.put(p.getUniqueId(),mode);p.closeInventory();
+        p.sendMessage("§dCourt-Editor §7Modus: §f"+mode+" §7| Rechtsklick setzen, Shift+Rechtsklick entfernen, Linksklick Menü");
+        if(p.getInventory().all(Material.GOLDEN_HOE).values().stream().noneMatch(i->"editor".equals(wandType(i))))p.getInventory().addItem(wand("editor"));
+    }
+    @EventHandler public void onSetupClose(InventoryCloseEvent e) {
+        if(e.getPlayer() instanceof Player p && e.getInventory()==setupInventories.get(p.getUniqueId()))setupInventories.remove(p.getUniqueId());
+    }
+    private int parsePage(String raw) {try{return Integer.parseInt(raw);}catch(NumberFormatException e){return 1;}}
+    private void help(CommandSender sender,int page) {
+        String[][] pages={
+            {"§d§lBasketballCraft 0.8.2 §7- Hilfe 1/3", "§e/bc help [1-3] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
+            {"§d§lBasketballCraft §7- Hilfe 2/3", "§e/bc arena save <name> §7- Halle speichern", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
+            {"§d§lBasketballCraft §7- Hilfe 3/3", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"}
+        };
+        int idx=Math.max(1,Math.min(3,page))-1;
+        for(String line:pages[idx])sender.sendMessage(line);
+        sender.sendMessage("§8-------------------- §7Seite "+(idx+1)+"/3 §8--------------------");
+    }
+    @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
+        List<String> options;
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","showhoops","sethoop");
+        else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
+            case "help"->List.of("1","2","3");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");default->List.of();};
+        else if(args.length==3 && args[0].equalsIgnoreCase("three"))options=List.of("1","2");
+        else if(args.length==3 && args[0].equalsIgnoreCase("arena") && List.of("select","delete").contains(args[1]))options=new ArrayList<>(arenas.keySet());
+        else options=List.of();
+        String prefix=args[args.length-1].toLowerCase(Locale.ROOT);
+        return options.stream().filter(x->x.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
+    }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§6§lBasketballCraft v0.8.1 §7| /bc wand 1|2|arena, /bc arena, /bc ball, /bc showhoops, /bc reset, /bc score");
-            sender.sendMessage("§7Ball aufnehmen: Nähe. §fLinksklick: Laden/Release §7| §fRechtsklick: Smart-Pass §7| §fShift+Rechtsklick: Ablegen §7| §dSprint+Sprung+Linksklick: Dunk");
+            help(sender,args.length>1 ? parsePage(args[1]) : 1);
             return true;
         }
         if (args[0].equalsIgnoreCase("score")) {
@@ -660,10 +800,22 @@ public final class BasketballCraft extends JavaPlugin implements Listener, Comma
         if (!sender.hasPermission("basketball.admin")) { sender.sendMessage("§cKeine Berechtigung."); return true; }
         if (!(sender instanceof Player p)) { sender.sendMessage("Only players can configure the court."); return true; }
         switch (args[0].toLowerCase(Locale.ROOT)) {
+            case "setup" -> { openSetup(p); }
+            case "three" -> {
+                if(args.length<2) {p.sendMessage("§e/bc three show|undo <1|2>|clear <1|2>");break;}
+                String sub=args[1].toLowerCase(Locale.ROOT);
+                if(sub.equals("show")){drawThree(p);p.sendMessage("§aDreierlinien angezeigt.");break;}
+                if(args.length<3 || !List.of("1","2").contains(args[2])){p.sendMessage("§cBitte Team 1 oder 2 angeben.");break;}
+                String side=args[2].equals("1")?"red":"blue";
+                List<Location> points=threeLines.computeIfAbsent(side,k->new ArrayList<>());
+                if(sub.equals("clear"))points.clear();else if(sub.equals("undo")&&!points.isEmpty())points.remove(points.size()-1);
+                else if(!List.of("clear","undo").contains(sub)){p.sendMessage("§cUnbekannte Aktion.");break;}
+                saveThree(side);drawThree(p);p.sendMessage("§aLinie "+side+": "+points.size()+" Punkte.");
+            }
             case "wand" -> {
-                if (args.length < 2) { p.sendMessage("§c/bc wand arena|1|2"); return true; }
+                if (args.length < 2) { p.getInventory().addItem(wand("editor")); p.sendMessage("§aCourt-Editor erhalten. §7/bc setup"); return true; }
                 String type = args[1].equals("1") ? "red" : args[1].equals("2") ? "blue" : args[1].toLowerCase(Locale.ROOT);
-                if (!List.of("arena", "red", "blue").contains(type)) { p.sendMessage("§c/bc wand arena|1|2"); return true; }
+                if (!List.of("arena", "red", "blue", "editor").contains(type)) { p.sendMessage("§c/bc wand arena|1|2"); return true; }
                 p.getInventory().addItem(wand(type)); p.sendMessage("§aMarkierungsstab erhalten: §f" + type);
             }
             case "arena" -> {

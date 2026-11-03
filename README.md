@@ -1,27 +1,19 @@
-# BasketballCraft 0.8.1 — Paper 1.21.11
+# BasketballCraft V0.8.2 – Paper 1.21.11
 
-Source project with GitHub Actions. Java 21 / Maven / Paper API 1.21.11.
+## Court-Editor
+`/bc setup` öffnet das Inventarmenü. Wähle Halle Ecke 1/2, Korb Team 1/2 oder Dreierlinie Team 1/2. Du erhältst den goldenen Editor-Stab. Rechtsklick auf einen Block setzt den Punkt, Shift+Rechtsklick entfernt Korb bzw. letzten Linienpunkt, Linksklick öffnet das Menü erneut. `/bc arena save <name>` speichert die Halle. Körbe und Dreierlinien werden direkt gespeichert. `/bc showhoops` aktiviert sichtbare Partikelringe; `/bc three show` zeigt die Linien.
 
-## Neu
-- Dynamisches Green-Release-Fenster: 70–100 Stamina = 8 Ticks, 40–69 = 6, 20–39 = 5, 0–19 = 4. Green-Zone ist im Actionbar-Meter sichtbar.
-- Zielhilfe nur bei echtem Blick auf den Ring (horizontal UND vertikal), maximal 7 Grad.
-- Sprint-Sperre bei Erschöpfung; Freigabe ab 25 Stamina. Regeneration beim Gehen und Stehen.
-- Dunk trennt den Ball vom Spieler und lässt ihn durch den Ring fallen; Anzeige +2.
-- Normale Körbe lassen den Ball mit seiner Fluggeschwindigkeit weiterfallen.
-- Ball-Display 15 % größer (gleiches Modell, Resourcepack muss bei unveränderten Texturen nicht zwingend neu aktiviert werden).
-- Korb-Wands: `/bc wand 1` (rot), `/bc wand 2` (blau). Rechtsklick Block = Ringmitte im Blockzentrum; Shift+Rechtsklick = Korb entfernen.
-- Hallen-Wand: `/bc wand arena` (Holzaxt). Linksklick = Ecke 1, Rechtsklick = Ecke 2.
-- `/bc arena save <name>`, `/bc arena show`, `/bc arena list`, `/bc arena select <name>`, `/bc arena delete <name>`.
+## Commands im Spiel
+`/bc help`, `/bc help 2`, `/bc help 3`: vollständige Liste in Minecraft. Tab-Vervollständigung ist eingebaut.
+
+## Fixes
+- Sprint-Sperre bei leerer Ausdauer über Sprint-Event und verringerte Walk-Speed, Freigabe ab 25.
+- Green-Zeitfenster 6/5/4/3 Ticks, kein GREEN-Titel oder Sound-Cue beim Aufladen.
+- Bodenprüfung mit 0.25 Block visuellem Radius.
+- 3-Punkte-Zone durch Strahl-Schnitt mit markierter Polygonlinie; Linie in Reihenfolge setzen, mindestens 3 Punkte. Wenn keine Linie markiert ist, greift der bisherige Radius-Fallback.
 
 ## Installation
-1. ZIP entpacken und Inhalt in GitHub-Repository hochladen.
-2. GitHub Actions → Build BasketballCraft → Run workflow.
-3. JAR-Artefakt `basketballcraft-0.8.1.jar` herunterladen und alte JAR im Server-Ordner `plugins/` ersetzen.
-4. Paper 1.21.11 mit Java 21 neu starten.
-5. Resourcepack (separates ZIP) clientseitig aktivieren, sofern noch nicht vorhanden.
+Java 21, Paper 1.21.11. GitHub Actions -> Build BasketballCraft -> JAR aus Actions-Artefakten laden. Resourcepack aus dem separaten ZIP aktivieren (unverändertes Ballmodell).
 
-## Wichtige Hinweise
-- Die Hallengrenze wird gespeichert und angezeigt, aber Out-of-Bounds ist noch nicht implementiert.
-- Die zwei Körbe sind aktuell global pro Server; eine automatische Zuordnung zu verschiedenen Hallen ist noch nicht implementiert. Die aktive Halle ist als Grundlage für künftige Matches gespeichert.
-- Der Dunk und die Ballphysik müssen ingame geprüft werden. In dieser Umgebung wurde kein vollständiger Paper-API-Build oder Server-Test durchgeführt.
-- Die Ausdauer-Sperre verwendet `Player#setSprinting(false)`; das Serververhalten sollte mit dem Client getestet werden.
+## Grenzen
+Die Dreierlinie ist eine offene, zusammenhängende Punktfolge; die Wertung verwendet den ersten Schnitt eines Strahls vom Korb zum Werfer. Die Linie sollte die relevante Spielfeldhälfte vollständig abdecken. Keine automatischen Einwürfe oder Teams. **Build und Ingame-Test sind noch nicht bestätigt.**
