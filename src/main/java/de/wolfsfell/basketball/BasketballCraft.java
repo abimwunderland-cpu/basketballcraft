@@ -58,6 +58,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private int dunkReadyTick;
     private static final int SHOT_CYCLE = 44;
     private static final int GREEN_CENTER = 26;
+    private final Map<String, List<Location>> teamSpawns = new HashMap<>();
+    private Location ballSpawn = null;
     private final Map<UUID, Location> arenaPos1 = new HashMap<>();
     private final Map<UUID, Location> arenaPos2 = new HashMap<>();
     private final Map<String, Location[]> arenas = new HashMap<>();
@@ -135,6 +137,17 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         }
         activeArena = getConfig().getString("active-arena");
         for (String side : List.of("red", "blue")) {
+            List<Location> spawns = new ArrayList<>();
+            for (Map<?, ?> row : getConfig().getMapList("team-spawns." + side)) {
+                Location loc = decodeSpawn(row);
+                if (loc != null) spawns.add(loc);
+            }
+            teamSpawns.put(side, spawns);
+        }
+        if (getConfig().isConfigurationSection("ball-spawn")) {
+            ballSpawn = getConfig().getLocation("ball-spawn.location");
+        }
+        for (String side : List.of("red", "blue")) {
             List<Location> points = new ArrayList<>();
             for (Map<?, ?> row : getConfig().getMapList("three-lines." + side)) {
                 World w = Bukkit.getWorld(String.valueOf(row.get("world")));
@@ -145,7 +158,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             threeLines.put(side, points);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.8.2 enabled. /bc help");
+        getLogger().info("BasketballCraft 0.8.3 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
@@ -723,12 +736,84 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
         }
     }
+    private Location decodeSpawn(Map<?, ?> row) {
+        try {
+            World w = Bukkit.getWorld(String.valueOf(row.get("world")));
+            if (w == null) return null;
+            return new Location(w, ((Number)row.get("x")).doubleValue(), ((Number)row.get("y")).doubleValue(), ((Number)row.get("z")).doubleValue(), ((Number)row.get("yaw")).floatValue(), ((Number)row.get("pitch")).floatValue());
+        } catch (Exception ex) { return null; }
+    }
+    private Map<String,Object> encodeSpawn(Location l) {
+        Map<String,Object> row = new LinkedHashMap<>();
+        row.put("world", l.getWorld().getName()); row.put("x", l.getX()); row.put("y", l.getY()); row.put("z", l.getZ());
+        row.put("yaw", (double)l.getYaw()); row.put("pitch", (double)l.getPitch()); return row;
+    }
+    private void persistSpawns() {
+        for (String side : List.of("red", "blue")) {
+            List<Map<String,Object>> rows = new ArrayList<>();
+            for (Location loc : teamSpawns.getOrDefault(side, List.of())) rows.add(encodeSpawn(loc));
+            getConfig().set("team-spawns."+side, rows);
+        }
+        getConfig().set("ball-spawn.location", ballSpawn);
+        saveConfig();
+    }
+    private void showSpawns(Player p) {
+        for (String side : List.of("red", "blue")) {
+            Particle.DustOptions dust = new Particle.DustOptions(side.equals("red") ? Color.RED : Color.AQUA, 1.6f);
+            int index = 0;
+            for (Location loc : teamSpawns.getOrDefault(side,List.of())) {
+                index++;
+                if (!loc.getWorld().equals(p.getWorld())) continue;
+                for (int i=0;i<32;i++) {
+                    double a=2*Math.PI*i/32;
+                    p.spawnParticle(Particle.DUST, loc.clone().add(Math.cos(a)*.65,.15,Math.sin(a)*.65),1,0,0,0,0,dust);
+                }
+                p.spawnParticle(Particle.END_ROD,loc.clone().add(0,1.5,0),6,.1,.2,.1,0);
+            }
+        }
+        if (ballSpawn != null && ballSpawn.getWorld().equals(p.getWorld()))
+            p.spawnParticle(Particle.END_ROD, ballSpawn, 20, .35,.2,.35,0);
+    }
+    private void showArenaSelection(Player p) {
+        Location a=arenaPos1.get(p.getUniqueId()), b=arenaPos2.get(p.getUniqueId());
+        if(a!=null && a.getWorld().equals(p.getWorld()))p.spawnParticle(Particle.END_ROD,a.clone().add(.5,.5,.5),25,.25,.25,.25,0);
+        if(b!=null && b.getWorld().equals(p.getWorld()))p.spawnParticle(Particle.FLAME,b.clone().add(.5,.5,.5),25,.25,.25,.25,0);
+        if(a!=null && b!=null && a.getWorld().equals(b.getWorld()) && a.getWorld().equals(p.getWorld())) {
+            double minX=Math.min(a.getBlockX(),b.getBlockX()), maxX=Math.max(a.getBlockX(),b.getBlockX())+1;
+            double minY=Math.min(a.getBlockY(),b.getBlockY()), maxY=Math.max(a.getBlockY(),b.getBlockY())+1;
+            double minZ=Math.min(a.getBlockZ(),b.getBlockZ()), maxZ=Math.max(a.getBlockZ(),b.getBlockZ())+1;
+            for (int i=0;i<=24;i++) {
+                double t=i/24.0;
+                for(double y:new double[]{minY,maxY})for(double z:new double[]{minZ,maxZ})p.spawnParticle(Particle.END_ROD,minX+(maxX-minX)*t,y,z,1,0,0,0,0);
+                for(double y:new double[]{minY,maxY})for(double x:new double[]{minX,maxX})p.spawnParticle(Particle.END_ROD,x,y,minZ+(maxZ-minZ)*t,1,0,0,0,0);
+                for(double x:new double[]{minX,maxX})for(double z:new double[]{minZ,maxZ})p.spawnParticle(Particle.END_ROD,x,minY+(maxY-minY)*t,z,1,0,0,0,0);
+            }
+        }
+    }
     private void editBlock(Player p, Block block, boolean undo) {
         String mode=editMode.getOrDefault(p.getUniqueId(),"arena1");
         Location loc=block.getLocation();
         if (mode.equals("arena1") || mode.equals("arena2")) {
-            (mode.equals("arena1") ? arenaPos1 : arenaPos2).put(p.getUniqueId(),loc);
-            p.sendMessage("§d"+mode+" §7gesetzt. §f/bc arena save <name>"); return;
+            if (undo) { (mode.equals("arena1") ? arenaPos1 : arenaPos2).remove(p.getUniqueId()); p.sendMessage("§eEcke entfernt. Noch nichts gespeichert."); }
+            else { (mode.equals("arena1") ? arenaPos1 : arenaPos2).put(p.getUniqueId(),loc);
+                p.sendMessage("§d"+(mode.equals("arena1")?"Ecke 1":"Ecke 2")+" gesetzt: §f"+loc.getBlockX()+" "+loc.getBlockY()+" "+loc.getBlockZ()); }
+            showArenaSelection(p);
+            if (arenaPos1.containsKey(p.getUniqueId()) && arenaPos2.containsKey(p.getUniqueId()))
+                p.sendMessage("§aBeide Ecken gesetzt! §7Jetzt erst §f/bc arena save <name> §7ausführen.");
+            else p.sendMessage("§eNoch nicht gespeichert! §7Setze auch die andere Ecke über /bc setup.");
+            return;
+        }
+        if (mode.equals("spawn-red") || mode.equals("spawn-blue")) {
+            String side=mode.substring(6); List<Location> list=teamSpawns.computeIfAbsent(side,k->new ArrayList<>());
+            if (undo) { if(!list.isEmpty())list.remove(list.size()-1); }
+            else { Location spot=block.getLocation().add(.5,1,.5); spot.setYaw(p.getLocation().getYaw()); spot.setPitch(0); list.add(spot); }
+            persistSpawns(); showSpawns(p);
+            p.sendMessage("§aTeam "+(side.equals("red")?"1":"2")+": §f"+list.size()+" Spawnpunkte gespeichert. §7Shift+Rechtsklick entfernt letzten.");
+            return;
+        }
+        if (mode.equals("spawn-ball")) {
+            ballSpawn=undo?null:block.getLocation().add(.5,1,.5);
+            persistSpawns();showSpawns(p);p.sendMessage(undo?"§eBall-Spawn entfernt.":"§aBall-Spawn gespeichert.");return;
         }
         if (mode.equals("red") || mode.equals("blue")) {
             if (undo) { hoops.remove(mode); getConfig().set("hoops."+mode,null); saveConfig(); p.sendMessage("§eKorb entfernt."); }
@@ -745,22 +830,23 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         p.sendMessage("§cWähle erst einen Editor-Modus: /bc setup");
     }
     private void openSetup(Player p) {
-        org.bukkit.inventory.Inventory inv=Bukkit.createInventory(null,27,"BasketballCraft | Court Editor");
-        String[] modes={"arena1","arena2","red","blue","three-red","three-blue"};
-        String[] names={"§dHalle: Ecke 1","§dHalle: Ecke 2","§cKorb Team 1","§9Korb Team 2","§cDreierlinie Team 1","§9Dreierlinie Team 2"};
-        Material[] materials={Material.WOODEN_AXE,Material.WOODEN_AXE,Material.BLAZE_ROD,Material.STICK,Material.RED_DYE,Material.BLUE_DYE};
-        int[] slots={10,11,12,14,15,16};
-        for(int i=0;i<modes.length;i++) { ItemStack item=new ItemStack(materials[i]); ItemMeta meta=item.getItemMeta();meta.setDisplayName(names[i]);meta.setLore(List.of("§7Klicken zum Auswählen", "§7Danach Editor-Stab benutzen"));item.setItemMeta(meta);inv.setItem(slots[i],item); }
+        org.bukkit.inventory.Inventory inv=Bukkit.createInventory(null,36,"BasketballCraft | Court Editor");
+        String[] names={"§dArena Ecke 1", "§dArena Ecke 2", "§cKorb Team 1", "§9Korb Team 2", "§cDreierlinie Team 1", "§9Dreierlinie Team 2", "§cTeam 1: Spawn hinzufügen", "§9Team 2: Spawn hinzufügen", "§eBall-Spawn"};
+        Material[] materials={Material.WOODEN_AXE,Material.WOODEN_AXE,Material.BLAZE_ROD,Material.STICK,Material.RED_DYE,Material.BLUE_DYE,Material.RED_BED,Material.BLUE_BED,Material.SLIME_BALL};
+        int[] slots={10,11,12,14,15,16,20,22,24};
+        for(int i=0;i<names.length;i++) { ItemStack item=new ItemStack(materials[i]); ItemMeta meta=item.getItemMeta();meta.setDisplayName(names[i]);meta.setLore(List.of("§7Klicken: Modus wählen", "§7Editor-Stab: Rechtsklick setzen", "§7Shift+Rechtsklick: zurück", i<2?"§eArena erst mit /bc arena save <name> speichern":"§aMarkierung wird sofort gespeichert"));item.setItemMeta(meta);inv.setItem(slots[i],item); }
+        ItemStack info=new ItemStack(Material.BOOK);ItemMeta m=info.getItemMeta();m.setDisplayName("§e§lAnleitung");m.setLore(List.of("§71. Beide Arena-Ecken einzeln setzen", "§72. /bc arena save <name>","§73. Team-Spawns beliebig oft setzen", "§74. /bc spawn show für Vorschau"));info.setItemMeta(m);inv.setItem(31,info);
         setupInventories.put(p.getUniqueId(),inv); p.openInventory(inv);
     }
     @EventHandler public void onSetupClick(InventoryClickEvent e) {
         if (!(e.getWhoClicked() instanceof Player p)) return;
         if (e.getView().getTopInventory()!=setupInventories.get(p.getUniqueId())) return;
         e.setCancelled(true); if(e.getClickedInventory()!=e.getView().getTopInventory())return;
-        String mode=switch(e.getRawSlot()) {case 10->"arena1";case 11->"arena2";case 12->"red";case 14->"blue";case 15->"three-red";case 16->"three-blue";default->null;};
+        String mode=switch(e.getRawSlot()) {case 10->"arena1";case 11->"arena2";case 12->"red";case 14->"blue";case 15->"three-red";case 16->"three-blue";case 20->"spawn-red";case 22->"spawn-blue";case 24->"spawn-ball";default->null;};
         if(mode==null)return;
         editMode.put(p.getUniqueId(),mode);p.closeInventory();
-        p.sendMessage("§dCourt-Editor §7Modus: §f"+mode+" §7| Rechtsklick setzen, Shift+Rechtsklick entfernen, Linksklick Menü");
+        p.sendMessage("§dCourt-Editor §7Modus: §f"+mode+" §7| Rechtsklick setzen, Shift+Rechtsklick zurück, Linksklick Menü");
+        if(mode.startsWith("arena"))p.sendMessage("§eArena-Ecken werden NICHT automatisch gespeichert. §7Erst beide markieren, dann /bc arena save <name>.");
         if(p.getInventory().all(Material.GOLDEN_HOE).values().stream().noneMatch(i->"editor".equals(wandType(i))))p.getInventory().addItem(wand("editor"));
     }
     @EventHandler public void onSetupClose(InventoryCloseEvent e) {
@@ -769,9 +855,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private int parsePage(String raw) {try{return Integer.parseInt(raw);}catch(NumberFormatException e){return 1;}}
     private void help(CommandSender sender,int page) {
         String[][] pages={
-            {"§d§lBasketballCraft 0.8.2 §7- Hilfe 1/3", "§e/bc help [1-3] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
-            {"§d§lBasketballCraft §7- Hilfe 2/3", "§e/bc arena save <name> §7- Halle speichern", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
-            {"§d§lBasketballCraft §7- Hilfe 3/3", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"}
+            {"§d§lBasketballCraft 0.8.3 §7- Hilfe 1/3", "§e/bc help [1-3] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc spawn add <1|2> §7- Teamspawn an eigener Position", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
+            {"§d§lBasketballCraft §7- Hilfe 2/3", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
+            {"§d§lBasketballCraft §7- Hilfe 3/3", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"}
         };
         int idx=Math.max(1,Math.min(3,page))-1;
         for(String line:pages[idx])sender.sendMessage(line);
@@ -779,10 +865,10 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","showhoops","sethoop");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");default->List.of();};
-        else if(args.length==3 && args[0].equalsIgnoreCase("three"))options=List.of("1","2");
+            case "help"->List.of("1","2","3");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");default->List.of();};
+        else if(args.length==3 && (args[0].equalsIgnoreCase("three") || args[0].equalsIgnoreCase("spawn")))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && List.of("select","delete").contains(args[1]))options=new ArrayList<>(arenas.keySet());
         else options=List.of();
         String prefix=args[args.length-1].toLowerCase(Locale.ROOT);
@@ -801,6 +887,29 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (!(sender instanceof Player p)) { sender.sendMessage("Only players can configure the court."); return true; }
         switch (args[0].toLowerCase(Locale.ROOT)) {
             case "setup" -> { openSetup(p); }
+            case "spawn" -> {
+                if(args.length<2){p.sendMessage("§e/bc spawn add <1|2> | list | show | remove <1|2> [nummer] | clear <1|2> | ball");break;}
+                String sub=args[1].toLowerCase(Locale.ROOT);
+                if(sub.equals("show")){showSpawns(p);p.sendMessage("§aSpawnpunkte als Partikel angezeigt.");break;}
+                if(sub.equals("list")){
+                    for(String side:List.of("red","blue")){List<Location> points=teamSpawns.getOrDefault(side,List.of());p.sendMessage("§eTeam "+(side.equals("red")?"1":"2")+": §f"+points.size()+" Spawns");int i=0;for(Location l:points){i++;p.sendMessage("§7  "+i+". "+l.getWorld().getName()+" "+l.getBlockX()+" "+l.getBlockY()+" "+l.getBlockZ());}}
+                    p.sendMessage("§eBall-Spawn: §f"+(ballSpawn==null?"nicht gesetzt":ballSpawn.getBlockX()+" "+ballSpawn.getBlockY()+" "+ballSpawn.getBlockZ()));break;
+                }
+                if(sub.equals("ball")){ballSpawn=p.getLocation().clone();persistSpawns();showSpawns(p);p.sendMessage("§aBall-Spawn auf deiner Position gespeichert.");break;}
+                if(args.length<3 || !List.of("1","2").contains(args[2])){p.sendMessage("§cBitte Team 1 oder 2 angeben.");break;}
+                String side=args[2].equals("1")?"red":"blue";
+                List<Location> points=teamSpawns.computeIfAbsent(side,k->new ArrayList<>());
+                if(sub.equals("add")){points.add(p.getLocation().clone());p.sendMessage("§aSpawn "+points.size()+" für Team "+args[2]+" gespeichert (inklusive Blickrichtung).");}
+                else if(sub.equals("clear")){points.clear();p.sendMessage("§eTeam-Spawns gelöscht.");}
+                else if(sub.equals("remove")){
+                    int index=points.size()-1;
+                    if(args.length>=4)try{index=Integer.parseInt(args[3])-1;}catch(NumberFormatException ignored){index=-1;}
+                    if(index<0||index>=points.size()){p.sendMessage("§cSpawn-Nummer ungültig. /bc spawn list");break;}
+                    points.remove(index);p.sendMessage("§aSpawn entfernt.");
+                } else {p.sendMessage("§cUnbekannter Spawn-Befehl.");break;}
+                persistSpawns();showSpawns(p);
+            }
+
             case "three" -> {
                 if(args.length<2) {p.sendMessage("§e/bc three show|undo <1|2>|clear <1|2>");break;}
                 String sub=args[1].toLowerCase(Locale.ROOT);
