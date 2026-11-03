@@ -579,30 +579,46 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             if (wasGrounded && !onGround && p.getVelocity().getY() > 0.08) jumpWindow.put(id, tick + 12);
             grounded.put(id, onGround);
             if (p.isSprinting()) sprintRecent.put(id, tick);
+
             double value = energy(p);
-            boolean sprinting = p.isSprinting();
-            if (sprinting && value <= 0.1) {
-                p.setSprinting(false);
-                sprintUnlock.put(id, 25);
-                sprinting = false;
+            boolean exhausted = sprintUnlock.containsKey(id);
+            if (exhausted && value >= 30.0) {
+                sprintUnlock.remove(id);
+                exhausted = false;
             }
-            if (sprintUnlock.containsKey(id) && value < sprintUnlock.get(id)) {
-                if (p.isSprinting()) p.setSprinting(false);
-                sprinting = false;
-            } else sprintUnlock.remove(id);
-            if (sprinting) value -= (id.equals(carrier) ? getConfig().getDouble("stamina.sprint-with-ball-per-second", 9)
-                    : getConfig().getDouble("stamina.sprint-per-second", 5)) / 20.0;
-            else {
+            boolean sprinting = p.isSprinting() && !exhausted;
+            if (exhausted && p.isSprinting()) p.setSprinting(false);
+            if (sprinting) {
+                double drain = id.equals(carrier)
+                    ? getConfig().getDouble("stamina.sprint-with-ball-per-second", 9.0)
+                    : getConfig().getDouble("stamina.sprint-per-second", 5.0);
+                // Lower stamina makes prolonged sprinting increasingly expensive.
+                if (value < 40.0) drain *= 1.5;
+                value -= drain / 20.0;
+            } else {
                 boolean moving = p.getVelocity().clone().setY(0).lengthSquared() > 0.004;
-                value += (moving ? getConfig().getDouble("stamina.walk-regen-per-second", 3)
-                    : getConfig().getDouble("stamina.idle-regen-per-second", 6)) / 20.0;
+                double regen = moving
+                    ? getConfig().getDouble("stamina.walk-regen-per-second", 2.0)
+                    : getConfig().getDouble("stamina.idle-regen-per-second", 7.0);
+                if (id.equals(carrier)) regen *= getConfig().getDouble("stamina.ball-regen-multiplier", 0.6);
+                value += regen / 20.0;
             }
-            value = Math.max(0, Math.min(100, value));
-            if (value <= 0.01) { sprintUnlock.put(id, 25); p.setSprinting(false); }
-            if (sprintUnlock.containsKey(id) && value < 25) {
+            value = Math.max(0.0, Math.min(100.0, value));
+            if (value <= 0.01) {
+                value = 0.0;
+                sprintUnlock.put(id, 30);
+                exhausted = true;
                 p.setSprinting(false);
+            }
+            // Gradual slowdown begins BEFORE stamina reaches zero.
+            // Remember the original speed only once, so repeated ticks never compound it.
+            if (value < 40.0) {
                 baseWalkSpeed.putIfAbsent(id, p.getWalkSpeed());
-                p.setWalkSpeed(Math.min(baseWalkSpeed.get(id), 0.13f));
+                float original = baseWalkSpeed.get(id);
+                double multiplier = value >= 15.0
+                    ? 0.85 + 0.15 * ((value - 15.0) / 25.0)
+                    : 0.65 + 0.20 * (value / 15.0);
+                p.setWalkSpeed((float) Math.max(0.0, Math.min(1.0, original * multiplier)));
             } else restoreSpeed(p);
             stamina.put(id, value);
             if (tick % 10 == 0 && !charging.containsKey(id)) {
@@ -610,6 +626,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 StringBuilder bar = new StringBuilder("§d⚡ §7[");
                 for (int i = 0; i < 10; i++) bar.append(i < bars ? (value < 25 ? "§c▌" : "§d▌") : "§8▌");
                 bar.append("§7] §f").append((int)Math.round(value)).append("/100");
+                if (exhausted) bar.append(" §cSPRINT GESPERRT");
                 if (id.equals(carrier)) bar.append(" §7| §d🏀");
                 p.sendActionBar(bar.toString());
             }
@@ -620,8 +637,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (original != null && p.isOnline()) p.setWalkSpeed(original);
     }
     @EventHandler public void onSprint(PlayerToggleSprintEvent e) {
-        if (e.isSprinting() && sprintUnlock.containsKey(e.getPlayer().getUniqueId()) && energy(e.getPlayer()) < 25) {
-            e.setCancelled(true); e.getPlayer().setSprinting(false);
+        if (e.isSprinting() && sprintUnlock.containsKey(e.getPlayer().getUniqueId()) && energy(e.getPlayer()) < 30.0) {
+            e.setCancelled(true);
+            e.getPlayer().setSprinting(false);
         }
     }
     private void updateDunk() {

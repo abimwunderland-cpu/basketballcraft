@@ -19,3 +19,11 @@ Push source to GitHub; Actions workflow builds the JAR. Local: `mvn package`. Ja
 
 ## Verification
 Archive and source changes prepared, but Java compilation against the Paper API and live gameplay were not verified in this environment. Test on a backup server before replacing production. No new resourcepack required.
+
+## v0.8.4 — stamina balancing only
+- Sprint lock at 0 stamina, unlock at 30.
+- Speed reduction begins under 40, becomes stronger under 15.
+- Walking restores 2 stamina/sec, standing 7 stamina/sec; carrying ball reduces both to 60%.
+- Sprint cost increases by 50% below 40 stamina.
+- All court, hoop, shot and spawn systems unchanged.
+- Existing resourcepack remains compatible.
