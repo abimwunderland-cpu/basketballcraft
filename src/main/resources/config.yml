@@ -8,7 +8,7 @@ physics:
 court:
   three-point-distance: 8.0
 shooting:
-  assist-max-angle-degrees: 12.0
+  assist-max-angle-degrees: 7.0
   max-distance: 22.0
 passing:
   speed: 1.10

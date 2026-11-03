@@ -1,21 +1,27 @@
-# BasketballCraft v0.8 (Paper 1.21.11)
+# BasketballCraft 0.8.1 — Paper 1.21.11
+
+Source project with GitHub Actions. Java 21 / Maven / Paper API 1.21.11.
 
 ## Neu
-- Ausdauer (100 Punkte), Sprintverbrauch, Regeneration, Sprint-Sperre bis 25 Punkte
-- Manueller Dunk: Sprinten, springen, innerhalb 12 Ticks Linksklick in Korbnähe (max. 3,5 Blöcke, max. 38°); mindestens 70 Ausdauer. Dunk kostet 35, zählt 2 Punkte.
-- Ball beim Dribbeln weiter vorn und näher zur Mitte
-- Zielhilfe auf maximal 12° begrenzt; selbst Green Release korrigiert falsches Zielen nicht vollständig
-- V0.7 Smart-Pass, Pickup und Wurfmeter bleiben erhalten; keine Jerseys
+- Dynamisches Green-Release-Fenster: 70–100 Stamina = 8 Ticks, 40–69 = 6, 20–39 = 5, 0–19 = 4. Green-Zone ist im Actionbar-Meter sichtbar.
+- Zielhilfe nur bei echtem Blick auf den Ring (horizontal UND vertikal), maximal 7 Grad.
+- Sprint-Sperre bei Erschöpfung; Freigabe ab 25 Stamina. Regeneration beim Gehen und Stehen.
+- Dunk trennt den Ball vom Spieler und lässt ihn durch den Ring fallen; Anzeige +2.
+- Normale Körbe lassen den Ball mit seiner Fluggeschwindigkeit weiterfallen.
+- Ball-Display 15 % größer (gleiches Modell, Resourcepack muss bei unveränderten Texturen nicht zwingend neu aktiviert werden).
+- Korb-Wands: `/bc wand 1` (rot), `/bc wand 2` (blau). Rechtsklick Block = Ringmitte im Blockzentrum; Shift+Rechtsklick = Korb entfernen.
+- Hallen-Wand: `/bc wand arena` (Holzaxt). Linksklick = Ecke 1, Rechtsklick = Ecke 2.
+- `/bc arena save <name>`, `/bc arena show`, `/bc arena list`, `/bc arena select <name>`, `/bc arena delete <name>`.
 
 ## Installation
-1. ZIP-Inhalt ins GitHub-Repository hochladen, GitHub Actions `Build BasketballCraft` ausführen.
-2. `basketballcraft-0.8.0.jar` aus dem Action-Artefakt in den plugins-Ordner kopieren. Alte Version entfernen.
-3. Resourcepack-ZIP clientseitig aktivieren.
-4. Server neu starten. `/bc ball`, `/bc sethoop red|blue`, `/bc showhoops`.
+1. ZIP entpacken und Inhalt in GitHub-Repository hochladen.
+2. GitHub Actions → Build BasketballCraft → Run workflow.
+3. JAR-Artefakt `basketballcraft-0.8.1.jar` herunterladen und alte JAR im Server-Ordner `plugins/` ersetzen.
+4. Paper 1.21.11 mit Java 21 neu starten.
+5. Resourcepack (separates ZIP) clientseitig aktivieren, sofern noch nicht vorhanden.
 
-## Testhinweise
-- Die Dunk-Animation ist eine kontrollierte Velocity-Bewegung, kein Teleport. Minecraft-Kollisionen können Dunks verhindern.
-- Die Dunk-Erkennung nutzt die markierte Ringmitte. Hoops müssen exakt gesetzt sein.
-- Falls eine ältere `plugins/BasketballCraft/config.yml` existiert, neue Werte manuell übernehmen oder vor Neustart sichern und neu generieren lassen. Die Zielhilfe wird im Code auf 12° begrenzt.
-- Wurfphysik ist aus v0.7 übernommen; Trefferverhalten und Sprungimpuls bitte auf der eigenen Map testen.
-- Das Ballmodell ist weiterhin das bisherige V0.7-Modell, nicht neu designt.
+## Wichtige Hinweise
+- Die Hallengrenze wird gespeichert und angezeigt, aber Out-of-Bounds ist noch nicht implementiert.
+- Die zwei Körbe sind aktuell global pro Server; eine automatische Zuordnung zu verschiedenen Hallen ist noch nicht implementiert. Die aktive Halle ist als Grundlage für künftige Matches gespeichert.
+- Der Dunk und die Ballphysik müssen ingame geprüft werden. In dieser Umgebung wurde kein vollständiger Paper-API-Build oder Server-Test durchgeführt.
+- Die Ausdauer-Sperre verwendet `Player#setSprinting(false)`; das Serververhalten sollte mit dem Client getestet werden.
