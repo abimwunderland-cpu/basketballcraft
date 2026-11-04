@@ -146,7 +146,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             for(String entry:new HashSet<>(obj.getScoreboard().getEntries()))obj.getScoreboard().resetScores(entry);
             boolean live=matchActive() && playing(p);
             if(live){
-                obj.getScore("§5§m----------------").setScore(15);
+                obj.getScore((tick/20%2==0?"§5":"§d")+"§m----------------").setScore(15);
                 obj.getScore("§d§lBASKETBALL EVENT").setScore(14);
                 obj.getScore("§7Zeit §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)).setScore(13);
                 obj.getScore("§cROT §7vs §9BLAU").setScore(12);
@@ -155,7 +155,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 var top=playerPoints.entrySet().stream().sorted((a,b)->Integer.compare(b.getValue(),a.getValue())).limit(3).toList();
                 for(int i=0;i<3;i++)obj.getScore("§d"+(i+1)+". §f"+(i<top.size()?shortName(top.get(i).getKey()):"---")+" §7"+(i<top.size()?top.get(i).getValue():0)+" P").setScore(9-i);
             }else{
-                obj.getScore("§5§m----------------").setScore(15);
+                obj.getScore((tick/20%2==0?"§5":"§d")+"§m----------------").setScore(15);
                 obj.getScore("§d§lALL-TIME TOP 5").setScore(14);
                 var top=lifetimePoints.entrySet().stream().sorted((a,b)->{int v=Integer.compare(b.getValue(),a.getValue());return v!=0?v:Integer.compare(lifetimeWins.getOrDefault(b.getKey(),0),lifetimeWins.getOrDefault(a.getKey(),0));}).limit(5).toList();
                 for(int i=0;i<5;i++){
@@ -166,10 +166,10 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 int rank=1;for(var entry:lifetimePoints.entrySet())if(entry.getValue()>lifetimePoints.getOrDefault(id,0) || (entry.getValue().equals(lifetimePoints.getOrDefault(id,0)) && lifetimeWins.getOrDefault(entry.getKey(),0)>lifetimeWins.getOrDefault(id,0)))rank++;
                 obj.getScore("§dDu §7#"+rank+" §f"+lifetimePoints.getOrDefault(id,0)+"P §7"+lifetimeWins.getOrDefault(id,0)+"W").setScore(7);
             }
-            obj.getScore("§5§m--------------").setScore(4);
+            obj.getScore((tick/20%2==0?"§5":"§d")+"§m--------------").setScore(4);
             obj.getScore("§dLIVE Twitch WolfsfellTV").setScore(3);
             obj.getScore("§7Daily 17 UHR").setScore(2);
-            obj.getScore("§fYouTube WolfsfellTVHD").setScore(1);
+            obj.getScore("§cYouTube §fWolfsfellTVHD").setScore(1);
         }
     }
     private void teleportTeams() {
@@ -270,6 +270,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         Player holder=Bukkit.getPlayer(carrier);
         if(holder==null || holder.getWorld()!=defender.getWorld())return;
         UUID id=defender.getUniqueId();if(tick<defenseCooldown.getOrDefault(id,0))return;
+        // Every valid steal attempt consumes the three-second cooldown.
+        defenseCooldown.put(id,tick+60);
         Vector origin=defender.getEyeLocation().toVector();
         // Match the rendered dribbling ball: actual display position may differ from logical ball.
         Location visual=(display!=null && display.isValid())?display.getLocation():ball;
@@ -283,7 +285,6 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         double miss=target.clone().subtract(look.multiply(forward)).lengthSquared();
         if(miss>0.60*0.60)return;
         if(tick<possessionProtection.getOrDefault(holder.getUniqueId(),0))return;
-        defenseCooldown.put(id,tick+12);
         if(dunker!=null && dunker.equals(holder.getUniqueId())) {
             if(!defender.isOnGround()){
                 dunker=null;dunkSide=null;dropCarrier(holder);
@@ -292,7 +293,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             return;
         }
         carrier=null;charging.remove(holder.getUniqueId());chargeTicks.remove(holder.getUniqueId());
-        carry(defender);possessionProtection.put(id,tick+12);playerSteals.merge(id,1,Integer::sum);
+        carry(defender);possessionProtection.put(id,tick+60);playerSteals.merge(id,1,Integer::sum);
         defender.sendActionBar("§a§lSTEAL!");holder.sendActionBar("§cBall gestohlen!");
     }
     @EventHandler(priority=EventPriority.HIGHEST) public void onDefense(org.bukkit.event.entity.EntityDamageByEntityEvent e) {
@@ -303,6 +304,18 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if(matchPhase==MatchPhase.LIVE && (e.getRightClicked() instanceof Player || e.getRightClicked().equals(display))) {
             e.setCancelled(true);trySteal(e.getPlayer());
         }
+    }
+    @EventHandler(priority=EventPriority.HIGHEST, ignoreCancelled=false)
+    public void onEventBreak(BlockBreakEvent e) {
+        if(matchActive() && playing(e.getPlayer()))e.setCancelled(true);
+    }
+    @EventHandler(priority=EventPriority.HIGHEST, ignoreCancelled=false)
+    public void onEventPlace(org.bukkit.event.block.BlockPlaceEvent e) {
+        if(matchActive() && playing(e.getPlayer()))e.setCancelled(true);
+    }
+    @EventHandler(priority=EventPriority.HIGHEST, ignoreCancelled=false)
+    public void onEventDrop(org.bukkit.event.player.PlayerDropItemEvent e) {
+        if(matchActive() && playing(e.getPlayer()))e.setCancelled(true);
     }
     @EventHandler public void onMatchDamage(org.bukkit.event.entity.EntityDamageEvent e) {
         if (e.getEntity() instanceof Player p && matchActive() && playing(p))e.setCancelled(true);
@@ -445,7 +458,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         loadRestartPoints();
         loadLifetimeStats();
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        refreshBoards();getLogger().info("BasketballCraft 1.2 enabled. /bc help");
+        refreshBoards();getLogger().info("BasketballCraft 1.3 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
@@ -769,6 +782,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         updateMatch();
         updateStamina();
         updateDunk();
+        if(tick%5==0 && matchPhase==MatchPhase.LIVE){
+            for(Player player:Bukkit.getOnlinePlayers()){
+                int remaining=defenseCooldown.getOrDefault(player.getUniqueId(),0)-tick;
+                if(remaining>0 && playing(player) && !charging.containsKey(player.getUniqueId())){
+                    player.sendActionBar("§d✦ §7STEAL §c"+String.format(Locale.ROOT,"%.1f",remaining/20.0)+"s §d✦");
+                }
+            }
+        }
         for (UUID id : new ArrayList<>(charging.keySet())) {
             Player player = Bukkit.getPlayer(id);
             if (player == null || !id.equals(carrier)) { charging.remove(id); chargeTicks.remove(id); continue; }
