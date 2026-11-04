@@ -29,6 +29,22 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private MatchPhase matchPhase = MatchPhase.IDLE;
     private final Map<UUID, String> playerTeams = new HashMap<>();
     private final Map<UUID, Integer> playerPoints = new HashMap<>();
+    private final Map<UUID, Integer> lifetimePoints = new HashMap<>();
+    private final Map<UUID, Integer> lifetimeWins = new HashMap<>();
+    private boolean staminaEnabled(Player p) { return matchPhase==MatchPhase.LIVE && !matchPaused && playing(p); }
+    private void loadLifetimeStats() {
+        org.bukkit.configuration.file.YamlConfiguration data=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(new java.io.File(getDataFolder(),"leaderboard.yml"));
+        for(String k:data.getKeys(false)) try {
+            UUID id=UUID.fromString(k); lifetimePoints.put(id,data.getInt(k+".points"));lifetimeWins.put(id,data.getInt(k+".wins"));
+        } catch(IllegalArgumentException ignored) {}
+    }
+    private void saveLifetimeStats() {
+        org.bukkit.configuration.file.YamlConfiguration data=new org.bukkit.configuration.file.YamlConfiguration();
+        for(UUID id:lifetimePoints.keySet()){data.set(id+".points",lifetimePoints.getOrDefault(id,0));data.set(id+".wins",lifetimeWins.getOrDefault(id,0));}
+        try {data.save(new java.io.File(getDataFolder(),"leaderboard.yml"));}catch(java.io.IOException ex){getLogger().severe("Leaderboard speichern fehlgeschlagen: "+ex.getMessage());}
+    }
+    private String shortName(UUID id){String n=Bukkit.getOfflinePlayer(id).getName();if(n==null)n="Spieler";return n.length()>11?n.substring(0,11):n;}
+
     private final Map<UUID, Integer> playerSteals = new HashMap<>();
     private final Map<UUID, Integer> playerBlocks = new HashMap<>();
     private final Map<UUID, Integer> playerAssists = new HashMap<>();
@@ -115,32 +131,42 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         matchBoards.clear(); matchObjectives.clear(); oldBoards.clear();
     }
     private void refreshBoards() {
-        if (!matchActive() && matchPhase != MatchPhase.FINISHED) return;
         int seconds = matchPhase == MatchPhase.LIVE ? Math.max(0, (matchPaused ? pauseRemaining : matchEndTick - tick) / 20) :
             matchPhase == MatchPhase.COUNTDOWN ? Math.max(0, (countdownEndTick-tick)/20) : 0;
         for (Player p : Bukkit.getOnlinePlayers()) {
-            // Show the event scoreboard to every connected spectator, too.
             UUID id=p.getUniqueId();
             if (!matchBoards.containsKey(id)) {
                 oldBoards.put(id,p.getScoreboard());
                 var board=Bukkit.getScoreboardManager().getNewScoreboard();
-                var obj=board.registerNewObjective("bc_match", org.bukkit.scoreboard.Criteria.DUMMY, "§d§lBasketball Event");
+                var obj=board.registerNewObjective("bc_match",org.bukkit.scoreboard.Criteria.DUMMY,"§d§l✦ BASKETBALL ✦");
                 obj.setDisplaySlot(org.bukkit.scoreboard.DisplaySlot.SIDEBAR);
-                matchBoards.put(id,board); matchObjectives.put(id,obj); p.setScoreboard(board);
+                matchBoards.put(id,board);matchObjectives.put(id,obj);p.setScoreboard(board);
             }
             var obj=matchObjectives.get(id);
-            for (String entry : new HashSet<>(obj.getScoreboard().getEntries())) obj.getScoreboard().resetScores(entry);
-            obj.getScore("§7Zeit: §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)).setScore(11);
-            obj.getScore("§fTeam Rot §7vs §fTeam Blau").setScore(10);
-            obj.getScore("§cROT §f"+scores.getOrDefault("red",0)+" §7- §9BLAU §f"+scores.getOrDefault("blue",0)).setScore(9);
-            obj.getScore("§6Top 3 Scorer").setScore(8);
-            var top=playerPoints.entrySet().stream().sorted((a,b)->Integer.compare(b.getValue(),a.getValue())).limit(3).toList();
-            for(int i=0;i<3;i++) {
-                String name=i<top.size()?Optional.ofNullable(Bukkit.getOfflinePlayer(top.get(i).getKey()).getName()).orElse("Spieler"):"---";
-                if(name.length()>11)name=name.substring(0,11);
-                obj.getScore("§e"+(i+1)+". §f"+name+" §7"+(i<top.size()?top.get(i).getValue():0)).setScore(7-i);
+            for(String entry:new HashSet<>(obj.getScoreboard().getEntries()))obj.getScoreboard().resetScores(entry);
+            boolean live=matchActive() && playing(p);
+            if(live){
+                obj.getScore("§5§m----------------").setScore(15);
+                obj.getScore("§d§lBASKETBALL EVENT").setScore(14);
+                obj.getScore("§7Zeit §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)).setScore(13);
+                obj.getScore("§cROT §7vs §9BLAU").setScore(12);
+                obj.getScore("§c"+scores.getOrDefault("red",0)+" §7: §9"+scores.getOrDefault("blue",0)).setScore(11);
+                obj.getScore("§d§lTOP 3 SCORER").setScore(10);
+                var top=playerPoints.entrySet().stream().sorted((a,b)->Integer.compare(b.getValue(),a.getValue())).limit(3).toList();
+                for(int i=0;i<3;i++)obj.getScore("§d"+(i+1)+". §f"+(i<top.size()?shortName(top.get(i).getKey()):"---")+" §7"+(i<top.size()?top.get(i).getValue():0)+" P").setScore(9-i);
+            }else{
+                obj.getScore("§5§m----------------").setScore(15);
+                obj.getScore("§d§lALL-TIME TOP 5").setScore(14);
+                var top=lifetimePoints.entrySet().stream().sorted((a,b)->{int v=Integer.compare(b.getValue(),a.getValue());return v!=0?v:Integer.compare(lifetimeWins.getOrDefault(b.getKey(),0),lifetimeWins.getOrDefault(a.getKey(),0));}).limit(5).toList();
+                for(int i=0;i<5;i++){
+                    String line=i<top.size()?"§d"+(i+1)+". §f"+shortName(top.get(i).getKey())+" §7"+top.get(i).getValue()+"P "+lifetimeWins.getOrDefault(top.get(i).getKey(),0)+"W":"§8"+(i+1)+". ---";
+                    obj.getScore(line).setScore(13-i);
+                }
+                obj.getScore("§5§m---------------").setScore(8);
+                int rank=1;for(var entry:lifetimePoints.entrySet())if(entry.getValue()>lifetimePoints.getOrDefault(id,0) || (entry.getValue().equals(lifetimePoints.getOrDefault(id,0)) && lifetimeWins.getOrDefault(entry.getKey(),0)>lifetimeWins.getOrDefault(id,0)))rank++;
+                obj.getScore("§dDu §7#"+rank+" §f"+lifetimePoints.getOrDefault(id,0)+"P §7"+lifetimeWins.getOrDefault(id,0)+"W").setScore(7);
             }
-            obj.getScore("§7Status: §f"+(matchPaused?"PAUSE":matchPhase.name())).setScore(4);
+            obj.getScore("§5§m--------------").setScore(4);
             obj.getScore("§dLIVE Twitch WolfsfellTV").setScore(3);
             obj.getScore("§7Daily 17 UHR").setScore(2);
             obj.getScore("§fYouTube WolfsfellTVHD").setScore(1);
@@ -195,7 +221,15 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             UUID mvp=playerPoints.entrySet().stream().max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(null);
             if (mvp!=null) announce("§6Topscorer: §f"+Bukkit.getOfflinePlayer(mvp).getName()+" §7("+playerPoints.get(mvp)+" Punkte)");
         }
-        refreshBoards(); clearMatchBoards();matchPhase=MatchPhase.IDLE;
+        if(!cancelled){
+            for(var entry:playerPoints.entrySet())lifetimePoints.merge(entry.getKey(),entry.getValue(),Integer::sum);
+            int a=scores.getOrDefault("red",0),b=scores.getOrDefault("blue",0);
+            if(a!=b){String winner=a>b?"red":"blue";for(var entry:playerTeams.entrySet())if(winner.equals(entry.getValue()))lifetimeWins.merge(entry.getKey(),1,Integer::sum);}
+            saveLifetimeStats();
+        }
+        matchPhase=MatchPhase.IDLE;
+        for(Player p:Bukkit.getOnlinePlayers()){restoreSpeed(p);stamina.remove(p.getUniqueId());sprintUnlock.remove(p.getUniqueId());}
+        refreshBoards();
     }
     private void updateMatch() {
         if (matchPhase==MatchPhase.COUNTDOWN) {
@@ -237,7 +271,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if(holder==null || holder.getWorld()!=defender.getWorld())return;
         UUID id=defender.getUniqueId();if(tick<defenseCooldown.getOrDefault(id,0))return;
         Vector origin=defender.getEyeLocation().toVector();
-        Vector target=ball.toVector().subtract(origin);
+        // Match the rendered dribbling ball: actual display position may differ from logical ball.
+        Location visual=(display!=null && display.isValid())?display.getLocation():ball;
+        Vector target=visual.toVector().subtract(origin);
         double range=2.5;
         if(target.lengthSquared()>range*range || target.lengthSquared()<0.001)return;
         Vector look=defender.getEyeLocation().getDirection().normalize();
@@ -245,10 +281,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         double forward=target.dot(look);
         if(forward<0 || forward>range)return;
         double miss=target.clone().subtract(look.multiply(forward)).lengthSquared();
-        if(miss>0.42*0.42)return;
-        if(!defender.hasLineOfSight(holder))return;
-        defenseCooldown.put(id,tick+18);
+        if(miss>0.60*0.60)return;
         if(tick<possessionProtection.getOrDefault(holder.getUniqueId(),0))return;
+        defenseCooldown.put(id,tick+12);
         if(dunker!=null && dunker.equals(holder.getUniqueId())) {
             if(!defender.isOnGround()){
                 dunker=null;dunkSide=null;dropCarrier(holder);
@@ -408,13 +443,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             threeLines.put(side, points);
         }
         loadRestartPoints();
+        loadLifetimeStats();
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 1.1 enabled. /bc help");
+        refreshBoards();getLogger().info("BasketballCraft 1.2 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
-        clearMatchBoards(); restoreVests();
+        saveLifetimeStats();clearMatchBoards(); restoreVests();
         for (var entry:observerOriginalModes.entrySet()) {Player p=Bukkit.getPlayer(entry.getKey());if(p!=null)p.setGameMode(entry.getValue());}
         charging.clear(); chargeTicks.clear(); stamina.clear();
         for (Player p : Bukkit.getOnlinePlayers()) restoreSpeed(p);
@@ -678,7 +714,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             return;
         }
         if (matchPhase==MatchPhase.LIVE && carrier!=null && !p.getUniqueId().equals(carrier) && (action==Action.RIGHT_CLICK_AIR || action==Action.RIGHT_CLICK_BLOCK)) {
-            trySteal(p); return;
+            event.setCancelled(true);trySteal(p); return;
         }
         if(matchActive() && !participantAllowed(p) && wand==null){event.setCancelled(true);return;}
         if (matchPhase==MatchPhase.COUNTDOWN && playing(p)) {event.setCancelled(true);return;}
@@ -865,6 +901,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private void updateStamina() {
         for (Player p : Bukkit.getOnlinePlayers()) {
             UUID id = p.getUniqueId();
+            if(!staminaEnabled(p)) {restoreSpeed(p);stamina.remove(id);sprintUnlock.remove(id);exhaustedMoveAttempt.remove(id);continue;}
             boolean onGround = p.isOnGround();
             boolean wasGrounded = grounded.getOrDefault(id, onGround);
             if (wasGrounded && !onGround && p.getVelocity().getY() > 0.08) jumpWindow.put(id, tick + 12);
@@ -961,7 +998,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             Location safe=from.clone();Location[] c=arenas.get(activeArena);
             safe.setX(Math.min(c[0].getX(),c[1].getX())-1.5);e.setTo(safe);return;
         }
-        if (energy(p) > 5.0) return;
+        if (!staminaEnabled(p) || energy(p) > 5.0) return;
         // Preserve looking around and vertical motion, but disallow horizontal walking.
         if (dx * dx + dz * dz < 0.000001) return;
         exhaustedMoveAttempt.put(id, tick);
@@ -973,7 +1010,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         p.setVelocity(new Vector(0, v.getY(), 0));
     }
     @EventHandler public void onSprint(PlayerToggleSprintEvent e) {
-        if (e.isSprinting() && (energy(e.getPlayer()) <= 30.0 || sprintUnlock.containsKey(e.getPlayer().getUniqueId()))) {
+        if (staminaEnabled(e.getPlayer()) && e.isSprinting() && (energy(e.getPlayer()) <= 30.0 || sprintUnlock.containsKey(e.getPlayer().getUniqueId()))) {
             e.setCancelled(true);
             e.getPlayer().setSprinting(false);
         }
@@ -1021,7 +1058,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             dunker = null; dunkSide = null;
         }
     }
-    @EventHandler public void onJoin(PlayerJoinEvent event) { stamina.put(event.getPlayer().getUniqueId(), 100.0); }
+    @EventHandler public void onJoin(PlayerJoinEvent event) { Bukkit.getScheduler().runTaskLater(this,this::refreshBoards,2L); }
     private void drawHoops() {
         for (Player viewer : Bukkit.getOnlinePlayers()) {
             if (!hoopViewers.contains(viewer.getUniqueId())) continue;
