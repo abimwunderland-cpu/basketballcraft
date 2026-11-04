@@ -1,59 +1,42 @@
-# BasketballCraft 1.0.0 – Event Edition (Paper 1.21.11)
+# BasketballCraft V1.1 – Event Update (source)
 
-Source package based on the working 0.8.8 codebase. Java 21 / Paper 1.21.11. GitHub Actions builds the JAR; the ZIP itself is source, **not** a ready-to-install JAR. Existing 0.8.x resource pack can stay installed.
+Paper 1.21.11, Java 21. Built on the V1.0 source corresponding to the uploaded basketballcraft-1.0.0.jar. The original ball/resourcepack assets are unchanged.
 
-## Installation
+## Build
 
-1. Back up your server and `plugins/BasketballCraft/config.yml` (and keep the working 0.8.8 JAR for rollback).
-2. Upload source contents to a GitHub repository; Actions → Build → download the JAR artifact.
-3. Stop the Paper 1.21.11 server, replace old JAR, start server.
-4. Test on a **separate test server** before using in an event. Java compilation and Minecraft runtime were not verified in this environment.
+Upload the **contents** of this ZIP to GitHub, then run **Actions → Build BasketballCraft**. The workflow runs Maven and uploads `basketballcraft-1.1.0.jar`. This ZIP is source, not an installable JAR. **The Java/Paper build and in-game functionality have NOT been verified in this environment.** Back up your working V1.0 JAR and `plugins/BasketballCraft/config.yml` before testing.
 
-## Court setup
+## Event setup
 
-- `/bc setup` opens the existing editor. Set arena corners, both hoop rings, three-point lines and team spawn positions.
-- `/bc arena save <name>` saves after BOTH corners were marked; `/bc arena select <name>` chooses the active arena.
-- `/bc spawn add 1` and `/bc spawn add 2` create multiple spawn points for each team, including facing direction.
-- `/bc spawn ball` sets the center ball spawn (required for matches).
-- `/bc spawn list`, `/bc spawn show`, `/bc three show`, `/bc showhoops` help check setup.
+1. `/bc arena select <name>` – select existing arena, or `/bc setup` and `/bc arena save <name>`.
+2. `/bc arena bounds 1` – stand at one outside-court corner; `/bc arena bounds 2` – stand at the opposite corner. These define a separate **axis-aligned rectangle** for ball walls and access protection. `/bc arena bounds show` displays positions; `/bc arena bounds clear` reverts to arena corners.
+3. `/bc restart set 1` and `/bc restart set 2` – stand at the respective team restart locations. `/bc restart show` verifies them. If missing, the ball spawn is used as fallback.
+4. `/bc spawn add 1`, `/bc spawn add 2` – configure multiple team spawn positions; `/bc spawn ball` sets the center ball.
+5. `/bc team add <player> <1|2>` – assign teams. `/bc match time 5` then `/bc match start`.
+6. `/bc arena lock` – deny unassigned players access while a match is active; admins with `basketball.admin` bypass. `/bc arena unlock` temporarily disables it.
+7. `/bc help 5` – in-game help for new commands.
 
-**Important mapping:** Red hoop = Team 1's own/defended basket; Blue hoop = Team 2's own/defended basket. A live match awards points to the *opposite* team of the basket being scored in. Teams are controlled by the admin.
+## New mechanics
 
-## Event workflow
+- **Ball-focused steals**: right-click the ball or right-click while aiming directly at its visible position. 2.5 block range, 0.42 block aim radius, short cooldown. Teammate steals are also allowed. A possession-protection window remains after pickup.
+- **No event PvP**: player-vs-player damage cancelled while the match is active.
+- **Team vests**: dyed red/blue leather chestplates at match start; previous chestplate restored at match end or disconnect. For safety, avoid manually moving/changing chestplates during matches.
+- **Faster stamina regeneration**: 14 points/s standing still (reduced while holding the ball), with no regeneration while moving.
+- **Ball-only boundary walls**: simulated bounces along the marked rectangular court edges. No world barrier blocks are placed.
+- **Restart after score**: after 35 ticks, ball spawns at the conceding team's restart point and only that team can first pick it up. This applies to normal shots and dunks.
+- **Scoreboard**: right sidebar for all online players during matches, score/time, top 3 scorers, Twitch and YouTube lines.
+- **Arena access**: spectators without a team are kept outside the marked court while a match is active; admins bypass. This does not restrict flying spectators in spectator mode (they may freely observe).
 
-```
-/bc team add PlayerA 1
-/bc team add PlayerB 2
-/bc team list
-/bc match time 5
-/bc match start
-/bc match status
-/bc match pause
-/bc match resume
-/bc match stop
-```
+## Test checklist
 
-- `/bc team remove <player>`, `/bc team clear` (only outside matches)
-- `/bc spectate` toggles admin spectator mode (restores previous game mode)
-- `/bc stats [player]` shows current match points, assists, steals and blocks
-- `/bc help 4` lists new commands; `/bc help 1-3` list old commands
-- `/bc score` shows team score
+- [ ] GitHub Actions successfully compiles with Paper 1.21.11.
+- [ ] Aim-at-ball right click steal works from both teams; turning the ball away helps.
+- [ ] No PvP damage during active matches.
+- [ ] Team vests equip and restore.
+- [ ] Ball rebounds at all four court edges, including diagonal passes and high-speed shots.
+- [ ] Each scoring basket, including dunk, resets to correct conceding side; opponent cannot first pick up.
+- [ ] Unassigned players cannot walk onto the court; admin can enter.
+- [ ] Scoreboard updates all players, including spectators.
+- [ ] Stamina only regenerates while stationary.
 
-No hard-coded team size: supports 1v1 to 5v5 provided sufficient spawns and court space. Admin starts and stops the game manually. Default duration: 5 minutes. 5-second countdown. A player disconnecting pauses the match until an admin resumes it.
-
-## Defense
-
-- **Steal:** aim at an opposing ball carrier within 2 blocks and left-click. Requires proper facing, cooldown, and a short possession-protection window. Also supports direct right-click on a player.
-- **Shot block:** jump into the ball's flight path; defensive interception requires being airborne and moving upward.
-- **Dunk block:** defender jumps near dunker in time to interrupt the dunk; the ball is released.
-- Smart-pass in a live match aims only at teammates.
-
-## Known limitations / verification needed
-
-- This is a **test candidate**, not a certified production release. Maven/Java compilation and Paper runtime tests have **not** been performed here.
-- The plugin architecture from 0.8.8 stores a single active ball, court and game server-wide; multiple simultaneous arenas are not supported.
-- The original arcade shot physics and stamina are preserved. Shot difficulty is not yet fully rebalanced.
-- Match state, assignments and player stats are **in-memory** and reset on restart; arena/court settings remain in config.
-- No overtime, fouls, shot clock, tournament bracket, spectator camera automation or persistent leaderboards.
-- Admin should test team scoring (correct basket), blocking, steals, reconnect/pause, match countdown, scoreboard, and ball resets before an event.
-- PvP damage between participants is cancelled during a match; other installed plugins may interfere with movement or interactions.
+Known scope: one active match/arena per server; outside lines are rectangular rather than arbitrary polygon paths. Team labels are fixed Red/Blue; player stats are per-match. Do not use in a live event before testing.
