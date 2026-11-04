@@ -24,6 +24,7 @@ stamina:
   walk-with-ball-per-second: 3.5
   idle-regen-per-second: 14.0
   ball-regen-multiplier: 0.6
+  no-ball-regen-multiplier: 1.35
   pass-cost: 2.0
   shot-cost: 5.0
 dunk:

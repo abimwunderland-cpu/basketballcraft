@@ -31,6 +31,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Map<UUID, Integer> playerPoints = new HashMap<>();
     private final Map<UUID, Integer> lifetimePoints = new HashMap<>();
     private final Map<UUID, Integer> lifetimeWins = new HashMap<>();
+    private final java.io.File historyFile = new java.io.File("plugins/BasketballCraft/match-history.yml");
     private boolean staminaEnabled(Player p) { return matchPhase==MatchPhase.LIVE && !matchPaused && playing(p); }
     private void loadLifetimeStats() {
         org.bukkit.configuration.file.YamlConfiguration data=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(new java.io.File(getDataFolder(),"leaderboard.yml"));
@@ -42,6 +43,43 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         org.bukkit.configuration.file.YamlConfiguration data=new org.bukkit.configuration.file.YamlConfiguration();
         for(UUID id:lifetimePoints.keySet()){data.set(id+".points",lifetimePoints.getOrDefault(id,0));data.set(id+".wins",lifetimeWins.getOrDefault(id,0));}
         try {data.save(new java.io.File(getDataFolder(),"leaderboard.yml"));}catch(java.io.IOException ex){getLogger().severe("Leaderboard speichern fehlgeschlagen: "+ex.getMessage());}
+    }
+    private void recordMatchHistory() {
+        java.io.File file=new java.io.File(getDataFolder(),"match-history.yml");
+        org.bukkit.configuration.file.YamlConfiguration data=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
+        String key="matches."+System.currentTimeMillis();
+        data.set(key+".date",java.time.ZonedDateTime.now().toString());
+        data.set(key+".arena",String.valueOf(selectedArena));
+        data.set(key+".red",scores.getOrDefault("red",0));
+        data.set(key+".blue",scores.getOrDefault("blue",0));
+        int red=scores.getOrDefault("red",0),blue=scores.getOrDefault("blue",0);
+        data.set(key+".winner",red==blue?"draw":red>blue?"red":"blue");
+        for(var entry:playerTeams.entrySet()) {
+            String player=key+".players."+entry.getKey();
+            data.set(player+".name",Bukkit.getOfflinePlayer(entry.getKey()).getName());
+            data.set(player+".team",entry.getValue());
+            data.set(player+".points",playerPoints.getOrDefault(entry.getKey(),0));
+            data.set(player+".steals",playerSteals.getOrDefault(entry.getKey(),0));
+            data.set(player+".assists",playerAssists.getOrDefault(entry.getKey(),0));
+            data.set(player+".blocks",playerBlocks.getOrDefault(entry.getKey(),0));
+        }
+        try {data.save(file);}catch(java.io.IOException ex){getLogger().severe("Match-History konnte nicht gespeichert werden: "+ex.getMessage());}
+    }
+    private void showMatchHistory(CommandSender sender,int limit) {
+        java.io.File file=new java.io.File(getDataFolder(),"match-history.yml");
+        var data=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
+        var section=data.getConfigurationSection("matches");
+        if(section==null){sender.sendMessage("§7Noch keine gespeicherten Matches.");return;}
+        var keys=new java.util.ArrayList<>(section.getKeys(false));
+        keys.sort(java.util.Comparator.reverseOrder());
+        sender.sendMessage("§d§lBasketball Match-History §7(letzte "+Math.min(limit,keys.size())+")");
+        for(String k:keys.stream().limit(limit).toList()){
+            String base="matches."+k;
+            String winner=data.getString(base+".winner","draw");
+            sender.sendMessage("§7"+data.getString(base+".date",k)+" §c"+data.getInt(base+".red")+" §7: §9"+data.getInt(base+".blue")+" §dSieger: §f"+winner);
+            var players=data.getConfigurationSection(base+".players");
+            if(players!=null)for(String id:players.getKeys(false))sender.sendMessage(" §8- §f"+data.getString(base+".players."+id+".name","?")+" §7("+data.getString(base+".players."+id+".team", "?")+") "+data.getInt(base+".players."+id+".points")+" P");
+        }
     }
     private String shortName(UUID id){String n=Bukkit.getOfflinePlayer(id).getName();if(n==null)n="Spieler";return n.length()>11?n.substring(0,11):n;}
 
@@ -228,6 +266,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             int a=scores.getOrDefault("red",0),b=scores.getOrDefault("blue",0);
             if(a!=b){String winner=a>b?"red":"blue";for(var entry:playerTeams.entrySet())if(winner.equals(entry.getValue()))lifetimeWins.merge(entry.getKey(),1,Integer::sum);}
             saveLifetimeStats();
+            recordMatchHistory();
         }
         matchPhase=MatchPhase.IDLE;
         for(Player p:Bukkit.getOnlinePlayers()){restoreSpeed(p);stamina.remove(p.getUniqueId());sprintUnlock.remove(p.getUniqueId());}
@@ -983,6 +1022,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 // Standing still is the ONLY way to gain stamina.
                 double regen = getConfig().getDouble("stamina.idle-regen-per-second", 14.0);
                 if (id.equals(carrier)) regen *= getConfig().getDouble("stamina.ball-regen-multiplier", 0.6);
+                else regen *= getConfig().getDouble("stamina.no-ball-regen-multiplier", 1.35);
                 value += regen / 20.0;
             }
             value = Math.max(0.0, Math.min(100.0, value));
@@ -1311,7 +1351,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             {"§d§lBasketballCraft §7- Hilfe 2/4", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
             {"§d§lBasketballCraft §7- Hilfe 3/4", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"},
             {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Admin-Zuschauer", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Genau auf Ball zielen + Rechtsklick"},
-            {"§d§lBasketballCraft 1.1 §7- Hilfe 5/5", "§e/bc restart set <1|2> §7- Ball-Resetpunkt setzen", "§e/bc restart show §7- Resetpunkte anzeigen", "§e/bc arena lock|unlock §7- Zuschauer-Feldsperre", "§e/bc arena bounds 1|2 §7- Außenlinien setzen", "§7Ball prallt an Arenagrenzen ab", "§7Rechtsklick auf Ball: Steal (auch Teamkollegen)", "§7Event: kein PvP, Teamwesten Rot/Blau"}
+            {"§d§lBasketballCraft 1.1 §7- Hilfe 5/5", "§e/bc restart set <1|2> §7- Ball-Resetpunkt setzen", "§e/bc restart show §7- Resetpunkte anzeigen", "§e/bc arena lock|unlock §7- Zuschauer-Feldsperre", "§e/bc arena bounds 1|2 §7- Außenlinien setzen", "§7Ball prallt an Arenagrenzen ab", "§7Rechtsklick auf Ball: Steal (auch Teamkollegen)", "§7Event: kein PvP, Teamwesten Rot/Blau", "§e/bc history [anzahl] §7- Letzte Matches", "§e/bc leaderboard reset CONFIRM §7- Stats löschen"}
         };
         int idx=Math.max(1,Math.min(5,page))-1;
         for(String line:pages[idx])sender.sendMessage(line);
@@ -1319,7 +1359,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
             case "help"->List.of("1","2","3","4","5");case "team"->List.of("add","remove","list","clear");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
@@ -1348,6 +1388,19 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             sender.sendMessage("§dStats: §f"+Bukkit.getOfflinePlayer(id).getName()+" §7Punkte "+playerPoints.getOrDefault(id,0)+" | Assists "+playerAssists.getOrDefault(id,0)+" | Steals "+playerSteals.getOrDefault(id,0)+" | Blocks "+playerBlocks.getOrDefault(id,0));return true;
         }
         if (!sender.hasPermission("basketball.admin")) { sender.sendMessage("§cKeine Berechtigung."); return true; }
+        if (args[0].equalsIgnoreCase("history")) {
+            int count=5;
+            if(args.length>1)try{count=Math.max(1,Math.min(20,Integer.parseInt(args[1])));}catch(NumberFormatException ignored){}
+            showMatchHistory(sender,count);return true;
+        }
+        if(args[0].equalsIgnoreCase("leaderboard") && args.length>=2 && args[1].equalsIgnoreCase("reset")) {
+            if(matchActive()){sender.sendMessage("§cErst Match beenden.");return true;}
+            if(args.length<3 || !args[2].equalsIgnoreCase("CONFIRM")){
+                sender.sendMessage("§cACHTUNG: Löscht alle Gesamtpunkte und Siege! §e/bc leaderboard reset CONFIRM");return true;
+            }
+            lifetimePoints.clear();lifetimeWins.clear();saveLifetimeStats();refreshBoards();
+            sender.sendMessage("§aLeaderboard zurückgesetzt. Match-History bleibt gespeichert.");return true;
+        }
         if (!(sender instanceof Player p)) { sender.sendMessage("Only players can configure the court."); return true; }
         switch (args[0].toLowerCase(Locale.ROOT)) {
             case "restart" -> {
