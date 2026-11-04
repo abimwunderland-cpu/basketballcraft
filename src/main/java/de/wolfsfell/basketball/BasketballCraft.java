@@ -49,7 +49,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         org.bukkit.configuration.file.YamlConfiguration data=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
         String key="matches."+System.currentTimeMillis();
         data.set(key+".date",java.time.ZonedDateTime.now().toString());
-        data.set(key+".arena",String.valueOf(selectedArena));
+        data.set(key+".arena",String.valueOf(activeArena));
         data.set(key+".red",scores.getOrDefault("red",0));
         data.set(key+".blue",scores.getOrDefault("blue",0));
         int red=scores.getOrDefault("red",0),blue=scores.getOrDefault("blue",0);
