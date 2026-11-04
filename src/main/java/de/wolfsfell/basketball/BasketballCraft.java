@@ -24,6 +24,178 @@ import org.joml.Vector3f;
 import java.util.*;
 
 public final class BasketballCraft extends JavaPlugin implements Listener, TabExecutor {
+    // Event match state. One active arena/match per server (same scope as legacy ball).
+    private enum MatchPhase { IDLE, COUNTDOWN, LIVE, FINISHED }
+    private MatchPhase matchPhase = MatchPhase.IDLE;
+    private final Map<UUID, String> playerTeams = new HashMap<>();
+    private final Map<UUID, Integer> playerPoints = new HashMap<>();
+    private final Map<UUID, Integer> playerSteals = new HashMap<>();
+    private final Map<UUID, Integer> playerBlocks = new HashMap<>();
+    private final Map<UUID, Integer> playerAssists = new HashMap<>();
+    private final Map<UUID, Integer> defenseCooldown = new HashMap<>();
+    private final Map<UUID, Integer> possessionProtection = new HashMap<>();
+    private UUID lastPasser;
+    private int lastPassTick;
+    private int matchEndTick;
+    private int countdownEndTick;
+    private int matchSeconds = 300;
+    private boolean matchPaused;
+    private int pauseRemaining;
+    private UUID eventAdmin;
+    private final Map<UUID, GameMode> observerOriginalModes = new HashMap<>();
+    private final Map<UUID, org.bukkit.scoreboard.Scoreboard> oldBoards = new HashMap<>();
+    private final Map<UUID, org.bukkit.scoreboard.Scoreboard> matchBoards = new HashMap<>();
+    private final Map<UUID, org.bukkit.scoreboard.Objective> matchObjectives = new HashMap<>();
+    private final Map<UUID, Integer> ballPickupProtection = new HashMap<>();
+    private String opposite(String side) { return side.equals("red") ? "blue" : "red"; }
+    private boolean playing(Player p) { return playerTeams.containsKey(p.getUniqueId()); }
+    private boolean sameTeam(Player a, Player b) { return Objects.equals(playerTeams.get(a.getUniqueId()), playerTeams.get(b.getUniqueId())) && playing(a); }
+    private boolean matchActive() { return matchPhase == MatchPhase.LIVE || matchPhase == MatchPhase.COUNTDOWN; }
+    private boolean participantAllowed(Player p) { return !matchActive() || (matchPhase == MatchPhase.LIVE && !matchPaused && playing(p)); }
+    private void announce(String message) { Bukkit.broadcastMessage("§d§l[BasketballCraft] §r" + message); }
+    private String teamLabel(String side) { return side.equals("red") ? "§cTeam 1" : "§9Team 2"; }
+    private void clearMatchBoards() {
+        for (UUID id : new HashSet<>(matchBoards.keySet())) {
+            Player p = Bukkit.getPlayer(id);
+            if (p != null && p.isOnline()) { var board = oldBoards.get(id); if (board != null) p.setScoreboard(board); }
+        }
+        matchBoards.clear(); matchObjectives.clear(); oldBoards.clear();
+    }
+    private void refreshBoards() {
+        if (!matchActive() && matchPhase != MatchPhase.FINISHED) return;
+        int seconds = matchPhase == MatchPhase.LIVE ? Math.max(0, (matchPaused ? pauseRemaining : matchEndTick - tick) / 20) :
+            matchPhase == MatchPhase.COUNTDOWN ? Math.max(0, (countdownEndTick-tick)/20) : 0;
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            if (!playing(p) && !observerOriginalModes.containsKey(p.getUniqueId())) continue;
+            UUID id=p.getUniqueId();
+            if (!matchBoards.containsKey(id)) {
+                oldBoards.put(id,p.getScoreboard());
+                var board=Bukkit.getScoreboardManager().getNewScoreboard();
+                var obj=board.registerNewObjective("bc_match", org.bukkit.scoreboard.Criteria.DUMMY, "§d§l🏀 BasketballCraft");
+                obj.setDisplaySlot(org.bukkit.scoreboard.DisplaySlot.SIDEBAR);
+                matchBoards.put(id,board); matchObjectives.put(id,obj); p.setScoreboard(board);
+            }
+            var obj=matchObjectives.get(id);
+            for (String entry : new HashSet<>(obj.getScoreboard().getEntries())) obj.getScoreboard().resetScores(entry);
+            obj.getScore("§7Zeit: §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)).setScore(5);
+            obj.getScore("§cTeam 1: §f"+scores.getOrDefault("red",0)).setScore(4);
+            obj.getScore("§9Team 2: §f"+scores.getOrDefault("blue",0)).setScore(3);
+            obj.getScore("§7Status: §f"+(matchPaused?"PAUSE":matchPhase.name())).setScore(2);
+            obj.getScore("§7"+(playing(p)?"Dein Team: "+(playerTeams.get(id).equals("red")?"1":"2"):"Zuschauer")).setScore(1);
+        }
+    }
+    private void teleportTeams() {
+        for (String side : List.of("red","blue")) {
+            List<Location> locations=teamSpawns.getOrDefault(side,List.of());
+            int index=0;
+            for (var entry : playerTeams.entrySet()) {
+                if (!entry.getValue().equals(side)) continue;
+                Player p=Bukkit.getPlayer(entry.getKey()); if (p==null) continue;
+                Location spawn=locations.get(index++ % locations.size());
+                p.teleport(spawn); p.setFallDistance(0); p.setSprinting(false);
+                stamina.put(p.getUniqueId(),100.0); sprintUnlock.remove(p.getUniqueId()); restoreSpeed(p);
+            }
+        }
+    }
+    private void resetToCenter() {
+        Location loc=ballSpawn;
+        if (loc==null && activeArena!=null && arenas.containsKey(activeArena)) {
+            Location[] a=arenas.get(activeArena);
+            loc=a[0].clone().add(a[1]).multiply(0.5).add(0,1.5,0);
+        }
+        if (loc!=null) spawnBall(loc.clone().add(0,0.7,0));
+    }
+    private void beginCountdown(Player admin) {
+        if (matchActive()) { admin.sendMessage("§cEin Match läuft bereits."); return; }
+        if (activeArena==null || !arenas.containsKey(activeArena) || hoops.size()<2 || ballSpawn==null) {
+            admin.sendMessage("§cVorher Arena, beide Körbe und Ball-Spawn einrichten."); return;
+        }
+        for (String side:List.of("red","blue")) {
+            if (teamSpawns.getOrDefault(side,List.of()).isEmpty()) { admin.sendMessage("§cEs fehlen Spawnpunkte für "+teamLabel(side));return; }
+            if (playerTeams.values().stream().noneMatch(side::equals)) { admin.sendMessage("§cBeide Teams brauchen mindestens einen Spieler.");return; }
+        }
+        for (UUID id:playerTeams.keySet()) if (Bukkit.getPlayer(id)==null) { admin.sendMessage("§cEin zugewiesener Spieler ist offline. /bc team clear oder remove.");return; }
+        eventAdmin=admin.getUniqueId();
+        scores.put("red",0);scores.put("blue",0);
+        playerPoints.clear();playerSteals.clear();playerBlocks.clear();playerAssists.clear();
+        clearBall(); teleportTeams(); resetToCenter();
+        matchPhase=MatchPhase.COUNTDOWN;countdownEndTick=tick+100;matchPaused=false;
+        announce("§eMatch beginnt in 5 Sekunden! §7"+matchSeconds/60+" Minuten");refreshBoards();
+    }
+    private void finishMatch(boolean cancelled) {
+        if (matchPhase==MatchPhase.IDLE) return;
+        matchPhase=MatchPhase.FINISHED; matchPaused=false;
+        clearBall();
+        if (cancelled) announce("§cMatch abgebrochen.");
+        else {
+            int a=scores.getOrDefault("red",0),b=scores.getOrDefault("blue",0);
+            announce("§6§lSPIELENDE! §c"+a+" §7: §9"+b+" §7– "+(a==b?"Unentschieden":teamLabel(a>b?"red":"blue")+" gewinnt!"));
+            UUID mvp=playerPoints.entrySet().stream().max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(null);
+            if (mvp!=null) announce("§6Topscorer: §f"+Bukkit.getOfflinePlayer(mvp).getName()+" §7("+playerPoints.get(mvp)+" Punkte)");
+        }
+        refreshBoards(); clearMatchBoards();matchPhase=MatchPhase.IDLE;
+    }
+    private void updateMatch() {
+        if (matchPhase==MatchPhase.COUNTDOWN) {
+            if (tick>=countdownEndTick) {
+                matchPhase=MatchPhase.LIVE; matchEndTick=tick+matchSeconds*20;
+                announce("§a§lTIP-OFF! §7Das Spiel läuft!");
+            } else if ((countdownEndTick-tick)%20==0) {
+                int sec=(countdownEndTick-tick)/20;
+                for (UUID id:playerTeams.keySet()) { Player p=Bukkit.getPlayer(id); if(p!=null)p.sendTitle("§e"+sec,"§7Bereit machen",0,18,1); }
+            }
+        }
+        if (matchPhase==MatchPhase.LIVE && matchPaused) matchEndTick++;
+        if (matchPhase==MatchPhase.LIVE && !matchPaused && tick>=matchEndTick) finishMatch(false);
+        if (tick%20==0) refreshBoards();
+    }
+    private void recordScore(String hoopSide, int points) {
+        if (matchPhase!=MatchPhase.LIVE) return;
+        String scoringSide=opposite(hoopSide);
+        if (lastShooter==null || !scoringSide.equals(playerTeams.get(lastShooter))) return;
+        playerPoints.merge(lastShooter,points,Integer::sum);
+        if (lastPasser!=null && !lastPasser.equals(lastShooter) && scoringSide.equals(playerTeams.get(lastPasser)) && tick-lastPassTick<120)
+            playerAssists.merge(lastPasser,1,Integer::sum);
+    }
+    private void afterScore() {
+        if (matchPhase!=MatchPhase.LIVE) return;
+        // Reset after the celebration; protects against the same ball scoring twice.
+        Bukkit.getScheduler().runTaskLater(this, ()->{ if(matchPhase==MatchPhase.LIVE)resetToCenter(); },35L);
+    }
+    private void trySteal(Player defender) {
+        if (matchPhase!=MatchPhase.LIVE || matchPaused || !playing(defender) || carrier==null || defender.getUniqueId().equals(carrier))return;
+        Player attacker=Bukkit.getPlayer(carrier);if(attacker==null || sameTeam(defender,attacker))return;
+        UUID id=defender.getUniqueId();if(tick<defenseCooldown.getOrDefault(id,0))return;
+        if (!defender.getWorld().equals(attacker.getWorld()) || defender.getLocation().distanceSquared(attacker.getLocation())>4.0)return;
+        Vector to=attacker.getEyeLocation().toVector().subtract(defender.getEyeLocation().toVector());
+        if(to.lengthSquared()<0.01 || defender.getEyeLocation().getDirection().dot(to.normalize())<0.62)return;
+        defenseCooldown.put(id,tick+22);
+        if(tick<possessionProtection.getOrDefault(attacker.getUniqueId(),0)) {defender.sendActionBar("§cBall gerade geschützt");return;}
+        if (dunker!=null && dunker.equals(attacker.getUniqueId())) {
+            if (!defender.isOnGround() && defender.getLocation().distanceSquared(attacker.getLocation())<=3.5) {
+                dunker=null;dunkSide=null;dropCarrier(attacker);
+                playerBlocks.merge(id,1,Integer::sum);announce("§b§lDUNK GEBLOCKT! §f"+defender.getName());
+            }
+            return;
+        }
+        // Defense succeeds by proximity, aim and timing, not by random roll.
+        carrier=null;charging.remove(attacker.getUniqueId());chargeTicks.remove(attacker.getUniqueId());
+        carry(defender);possessionProtection.put(id,tick+16);
+        playerSteals.merge(id,1,Integer::sum);
+        defender.sendActionBar("§a§lSTEAL!");attacker.sendActionBar("§cBall gestohlen!");
+    }
+    @EventHandler public void onDefense(org.bukkit.event.entity.EntityDamageByEntityEvent e) {
+        if (!(e.getDamager() instanceof Player p) || !(e.getEntity() instanceof Player target))return;
+        if (!matchActive() || !playing(p) || !playing(target))return;
+        e.setCancelled(true);trySteal(p);
+    }
+    @EventHandler public void onPlayerInteractEntity(org.bukkit.event.player.PlayerInteractEntityEvent e) {
+        if (e.getHand()!=org.bukkit.inventory.EquipmentSlot.HAND)return;
+        if (e.getRightClicked() instanceof Player && matchPhase==MatchPhase.LIVE) {e.setCancelled(true);trySteal(e.getPlayer());}
+    }
+    @EventHandler public void onMatchDamage(org.bukkit.event.entity.EntityDamageEvent e) {
+        if (e.getEntity() instanceof Player p && matchActive() && playing(p))e.setCancelled(true);
+    }
     private NamespacedKey key;
     private ItemDisplay display;
     private Location ball;
@@ -160,11 +332,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             threeLines.put(side, points);
         }
         ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
-        getLogger().info("BasketballCraft 0.8.3 enabled. /bc help");
+        getLogger().info("BasketballCraft 1.0 enabled. /bc help");
     }
     @Override public void onDisable() {
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
+        clearMatchBoards();
+        for (var entry:observerOriginalModes.entrySet()) {Player p=Bukkit.getPlayer(entry.getKey());if(p!=null)p.setGameMode(entry.getValue());}
         charging.clear(); chargeTicks.clear(); stamina.clear();
         for (Player p : Bukkit.getOnlinePlayers()) restoreSpeed(p);
     }
@@ -205,7 +379,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private void carry(Player p) {
         if (carrier != null || ball == null || !p.getWorld().equals(ball.getWorld())) return;
         if (p.getUniqueId().equals(pickupLockedPlayer) && tick < pickupLockedUntil) return;
+        if (!participantAllowed(p)) return;
         carrier = p.getUniqueId();
+        possessionProtection.put(p.getUniqueId(),tick+12);
         airborne = false; velocity.zero(); passFlight = false; intendedReceiver = null;
         charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
         p.sendActionBar("§d🏀 Ballbesitz §7| §fLinksklick: Wurf §7| §fRechtsklick: Smart-Pass §7| §fShift+Rechtsklick: Ablegen §7| §dSprint+Sprung+Linksklick: Dunk");
@@ -225,7 +401,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         double range = getConfig().getDouble("passing.assist-range", 16.0);
         double maxAngle = Math.toRadians(getConfig().getDouble("passing.assist-angle-degrees", 12.0));
         for (Player other : p.getWorld().getPlayers()) {
-            if (other.equals(p) || other.isDead() || other.getGameMode() == GameMode.SPECTATOR) continue;
+            if (other.equals(p) || other.isDead() || other.getGameMode() == GameMode.SPECTATOR || (matchActive() && !sameTeam(p,other))) continue;
             Vector to = other.getEyeLocation().toVector().subtract(p.getEyeLocation().toVector());
             double distance = to.length();
             if (distance < 1.5 || distance > range) continue;
@@ -293,6 +469,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         passFlight = pass;
         intendedReceiver = null;
         if (pass) {
+            lastPasser=p.getUniqueId();lastPassTick=tick;
             Player receiver = smartTarget(p);
             if (receiver != null) {
                 Vector toward = receiver.getLocation().add(0, 1.15, 0).toVector().subtract(ball.toVector());
@@ -421,6 +598,10 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             return;
         }
+        if (matchPhase==MatchPhase.LIVE && carrier!=null && !p.getUniqueId().equals(carrier) && (action==Action.LEFT_CLICK_AIR || action==Action.LEFT_CLICK_BLOCK)) {
+            trySteal(p); return;
+        }
+        if (matchPhase==MatchPhase.COUNTDOWN && playing(p)) {event.setCancelled(true);return;}
         if (p.getUniqueId().equals(carrier)) {
             if (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK) {
                 event.setCancelled(true);
@@ -439,7 +620,11 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
         }
     }
-    @EventHandler public void onQuit(PlayerQuitEvent event) { hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); lastHorizontalMove.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
+    @EventHandler public void onQuit(PlayerQuitEvent event) {
+        if (matchPhase==MatchPhase.LIVE && playing(event.getPlayer())) {matchPaused=true;pauseRemaining=Math.max(0,matchEndTick-tick);announce("§eSpiel pausiert: "+event.getPlayer().getName()+" hat den Server verlassen.");}
+        observerOriginalModes.remove(event.getPlayer().getUniqueId());
+        matchBoards.remove(event.getPlayer().getUniqueId());oldBoards.remove(event.getPlayer().getUniqueId());matchObjectives.remove(event.getPlayer().getUniqueId());
+ hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); lastHorizontalMove.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
             dropCarrier(event.getEntity());
@@ -464,6 +649,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     private void step() {
         tick++;
+        updateMatch();
         updateStamina();
         updateDunk();
         for (UUID id : new ArrayList<>(charging.keySet())) {
@@ -507,7 +693,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         }
         if (!airborne) {
             for (Player p : ball.getWorld().getPlayers()) {
-                if (p.getLocation().distanceSquared(ball) <= Math.pow(setting("pickup-radius", 1.4), 2)) { carry(p); break; }
+                if (participantAllowed(p) && p.getLocation().distanceSquared(ball) <= Math.pow(setting("pickup-radius", 1.4), 2)) { carry(p); break; }
             }
             return;
         }
@@ -518,6 +704,17 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         int parts = Math.max(1, (int)Math.ceil(movement.length() / 0.22));
         for (int i = 0; i < parts; i++) {
             Location next = ball.clone().add(movement.clone().multiply(1.0 / parts));
+            if (matchPhase==MatchPhase.LIVE && !passFlight && airborne && lastShooter!=null && !scoredThisFlight) {
+                for (Player defender:next.getWorld().getPlayers()) {
+                    if (!playing(defender) || Objects.equals(playerTeams.get(defender.getUniqueId()),playerTeams.get(lastShooter)))continue;
+                    if (defender.isOnGround() || defender.getVelocity().getY()<=0.06)continue;
+                    if (defender.getLocation().add(0,1.45,0).distanceSquared(next)>1.4)continue;
+                    velocity=defender.getEyeLocation().getDirection().multiply(0.4).add(new Vector(0,0.22,0));
+                    lastShooter=null;scoredThisFlight=true;
+                    playerBlocks.merge(defender.getUniqueId(),1,Integer::sum);
+                    defender.sendActionBar("§b§lBLOCK!");announce("§bBlock von §f"+defender.getName());break;
+                }
+            }
             if (velocity.getY() < 0 && lastShooter != null && !scoredThisFlight) {
                 for (var hoopEntry : hoops.entrySet()) {
                     Location hoop = hoopEntry.getValue();
@@ -541,7 +738,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 Player caught = null;
                 double bestDist = catchRadius * catchRadius;
                 for (Player candidate : next.getWorld().getPlayers()) {
-                    if (candidate.isDead() || candidate.getGameMode() == GameMode.SPECTATOR) continue;
+                    if (candidate.isDead() || candidate.getGameMode() == GameMode.SPECTATOR || !participantAllowed(candidate)) continue;
                     if (candidate.getUniqueId().equals(pickupLockedPlayer) && tick < pickupLockedUntil) continue;
                     double d = candidate.getLocation().add(0, 1.0, 0).distanceSquared(next);
                     if (d < bestDist) { bestDist = d; caught = candidate; }
@@ -569,7 +766,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         display.teleport(ball);
         if (tick % 3 == 0) {
             for (Player p : ball.getWorld().getPlayers()) {
-                if (p.getLocation().distanceSquared(ball) < 2.25 && velocity.lengthSquared() < 0.12) { carry(p); break; }
+                if (participantAllowed(p) && p.getLocation().distanceSquared(ball) < 2.25 && velocity.lengthSquared() < 0.12) { carry(p); break; }
             }
         }
     }
@@ -688,6 +885,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (p == null || !p.isOnline() || hoop == null || !p.getWorld().equals(hoop.getWorld()) ||
                 !dunker.equals(carrier)) { dunker = null; dunkSide = null; return; }
         p.setFallDistance(0);
+        if (matchPhase==MatchPhase.LIVE) for (Player defender:p.getWorld().getPlayers()) {
+            if (!playing(defender) || sameTeam(defender,p) || defender.isOnGround())continue;
+            if (defender.getLocation().distanceSquared(p.getLocation())>3.0)continue;
+            if (defender.getVelocity().getY()<=0.06)continue;
+            dunker=null;dunkSide=null;dropCarrier(p);
+            playerBlocks.merge(defender.getUniqueId(),1,Integer::sum);
+            announce("§b§lDUNK GEBLOCKT! §f"+defender.getName());return;
+        }
         double dx = p.getLocation().getX() - hoop.getX();
         double dz = p.getLocation().getZ() - hoop.getZ();
         double distance = Math.hypot(dx, dz);
@@ -696,7 +901,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 p.getLocation().getY() + 2.15 >= hoop.getY() && p.getLocation().getY() <= hoop.getY() + 0.4) {
             lastShooter = p.getUniqueId(); shotOrigin = p.getLocation().clone();
             // Dunk is worth two, regardless of the starting distance.
-            scores.merge(dunkSide, 2, Integer::sum);
+            if (matchPhase==MatchPhase.LIVE && !opposite(dunkSide).equals(playerTeams.get(p.getUniqueId()))) {dunker=null;dunkSide=null;return;}
+            scores.merge(matchPhase==MatchPhase.LIVE?opposite(dunkSide):dunkSide, 2, Integer::sum);
+            recordScore(dunkSide,2);afterScore();
             Bukkit.broadcastMessage("§d§l🏀 DUNK! §f" + p.getName() + " §7(+2) §cROT " + scores.get("red") + " §7- §9" + scores.get("blue") + " BLAU");
             hoop.getWorld().playSound(hoop, Sound.ENTITY_PLAYER_LEVELUP, 1.2f, 0.7f);
             hoop.getWorld().spawnParticle(Particle.CRIT, hoop, 24, 0.5, 0.2, 0.5, 0.1);
@@ -741,6 +948,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         p.playSound(p, Sound.BLOCK_NOTE_BLOCK_PLING, 0.7f, 1.4f);
     }
     private void score(String side) {
+        if (matchPhase==MatchPhase.COUNTDOWN || (matchPhase==MatchPhase.LIVE && matchPaused))return;
         int points = 2;
         Location hoop = hoops.get(side);
         if (shotOrigin != null && hoop != null && shotOrigin.getWorld().equals(hoop.getWorld())) {
@@ -765,7 +973,10 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 }
             } else if (shotOrigin.distanceSquared(hoop) >= Math.pow(getConfig().getDouble("court.three-point-distance", 8.0), 2)) points = 3;
         }
-        scores.merge(side, points, Integer::sum);
+        if (matchPhase==MatchPhase.LIVE && (lastShooter==null || !opposite(side).equals(playerTeams.get(lastShooter))))return;
+        scores.merge(matchPhase==MatchPhase.LIVE?opposite(side):side, points, Integer::sum);
+        recordScore(side,points);
+        afterScore();
         String scorer = lastShooter == null ? "Unbekannt" : Optional.ofNullable(Bukkit.getOfflinePlayer(lastShooter).getName()).orElse("Spieler");
         Bukkit.broadcastMessage("§6§l🏀 KORB! §f" + scorer + " §7(" + points + " Punkte) §cROT " + scores.get("red") + " §7- §9" + scores.get("blue") + " BLAU");
         hoop.getWorld().playSound(hoop, Sound.ENTITY_PLAYER_LEVELUP, 1f, 1.2f);
@@ -912,19 +1123,22 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private int parsePage(String raw) {try{return Integer.parseInt(raw);}catch(NumberFormatException e){return 1;}}
     private void help(CommandSender sender,int page) {
         String[][] pages={
-            {"§d§lBasketballCraft 0.8.3 §7- Hilfe 1/3", "§e/bc help [1-3] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc spawn add <1|2> §7- Teamspawn an eigener Position", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
-            {"§d§lBasketballCraft §7- Hilfe 2/3", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
-            {"§d§lBasketballCraft §7- Hilfe 3/3", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"}
+            {"§d§lBasketballCraft 0.8.3 §7- Hilfe 1/4", "§e/bc help [1-4] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc spawn add <1|2> §7- Teamspawn an eigener Position", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
+            {"§d§lBasketballCraft §7- Hilfe 2/4", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
+            {"§d§lBasketballCraft §7- Hilfe 3/4", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"},
+            {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Admin-Zuschauer", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Gegner anvisieren + Linksklick"}
         };
-        int idx=Math.max(1,Math.min(3,page))-1;
+        int idx=Math.max(1,Math.min(4,page))-1;
         for(String line:pages[idx])sender.sendMessage(line);
-        sender.sendMessage("§8-------------------- §7Seite "+(idx+1)+"/3 §8--------------------");
+        sender.sendMessage("§8-------------------- §7Seite "+(idx+1)+"/4 §8--------------------");
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");default->List.of();};
+            case "help"->List.of("1","2","3","4");case "team"->List.of("add","remove","list","clear");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");default->List.of();};
+        else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
+        else if(args.length==4 && args[0].equalsIgnoreCase("team") && args[1].equalsIgnoreCase("add"))options=List.of("1","2");
         else if(args.length==3 && (args[0].equalsIgnoreCase("three") || args[0].equalsIgnoreCase("spawn")))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && List.of("select","delete").contains(args[1]))options=new ArrayList<>(arenas.keySet());
         else options=List.of();
@@ -940,9 +1154,49 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             sender.sendMessage("§cROT §f" + scores.get("red") + " §7- §f" + scores.get("blue") + " §9BLAU");
             return true;
         }
+        if (args[0].equalsIgnoreCase("stats")) {
+            UUID id = sender instanceof Player p ? p.getUniqueId() : null;
+            if (args.length>1) { Player p=Bukkit.getPlayerExact(args[1]); if(p!=null)id=p.getUniqueId(); }
+            if(id==null){sender.sendMessage("§cSpieler nicht gefunden.");return true;}
+            sender.sendMessage("§dStats: §f"+Bukkit.getOfflinePlayer(id).getName()+" §7Punkte "+playerPoints.getOrDefault(id,0)+" | Assists "+playerAssists.getOrDefault(id,0)+" | Steals "+playerSteals.getOrDefault(id,0)+" | Blocks "+playerBlocks.getOrDefault(id,0));return true;
+        }
         if (!sender.hasPermission("basketball.admin")) { sender.sendMessage("§cKeine Berechtigung."); return true; }
         if (!(sender instanceof Player p)) { sender.sendMessage("Only players can configure the court."); return true; }
         switch (args[0].toLowerCase(Locale.ROOT)) {
+            case "team" -> {
+                if(args.length<2){p.sendMessage("§e/bc team add <player> <1|2> | remove <player> | list | clear");break;}
+                String sub=args[1].toLowerCase(Locale.ROOT);
+                if(sub.equals("list")) {
+                    for(String side:List.of("red","blue")) {
+                        String names=playerTeams.entrySet().stream().filter(x->x.getValue().equals(side)).map(x->Optional.ofNullable(Bukkit.getOfflinePlayer(x.getKey()).getName()).orElse("? ")).reduce((a,b)->a+", "+b).orElse("keine");
+                        p.sendMessage(teamLabel(side)+" §7: §f"+names);
+                    }
+                } else if(sub.equals("clear") && !matchActive()) {playerTeams.clear();p.sendMessage("§aTeamzuweisungen gelöscht.");}
+                else if(sub.equals("add") && args.length>=4 && !matchActive()) {
+                    Player target=Bukkit.getPlayerExact(args[2]);
+                    if(target==null || !List.of("1","2").contains(args[3])){p.sendMessage("§cSpieler online und Team 1|2 angeben.");break;}
+                    playerTeams.put(target.getUniqueId(),args[3].equals("1")?"red":"blue");
+                    announce("§f"+target.getName()+" §7→ "+teamLabel(playerTeams.get(target.getUniqueId())));
+                } else if(sub.equals("remove") && args.length>=3 && !matchActive()) {
+                    Player target=Bukkit.getPlayerExact(args[2]);if(target!=null)playerTeams.remove(target.getUniqueId());p.sendMessage("§aTeamzuweisung entfernt.");
+                } else p.sendMessage("§cTeam kann während eines Matches nicht geändert werden. /bc team add <spieler> <1|2>");
+            }
+            case "match" -> {
+                if(args.length<2){p.sendMessage("§e/bc match start|stop|pause|resume|time <minuten>|status");break;}
+                switch(args[1].toLowerCase(Locale.ROOT)) {
+                    case "start" -> beginCountdown(p);
+                    case "stop" -> finishMatch(true);
+                    case "pause" -> {if(matchPhase==MatchPhase.LIVE){matchPaused=true;pauseRemaining=Math.max(0,matchEndTick-tick);announce("§eMatch pausiert.");}}
+                    case "resume" -> {if(matchPhase==MatchPhase.LIVE && matchPaused){matchPaused=false;matchEndTick=tick+pauseRemaining;announce("§aMatch fortgesetzt.");}}
+                    case "status" -> p.sendMessage("§dStatus: §f"+matchPhase+" §7| Teams: "+playerTeams.size()+" §7| "+scores.get("red")+":"+scores.get("blue"));
+                    case "time" -> {if(args.length<3 || matchActive()){p.sendMessage("§c/bc match time <1-30> (nur vor Spielstart)");break;}try{int min=Integer.parseInt(args[2]);if(min<1||min>30)throw new NumberFormatException();matchSeconds=min*60;p.sendMessage("§aMatchdauer: "+min+" Minuten");}catch(NumberFormatException ex){p.sendMessage("§c1 bis 30 Minuten eingeben.");}}
+                    default -> p.sendMessage("§c/bc match start|stop|pause|resume|time|status");
+                }
+            }
+            case "spectate" -> {
+                if(!observerOriginalModes.containsKey(p.getUniqueId())) {observerOriginalModes.put(p.getUniqueId(),p.getGameMode());p.setGameMode(GameMode.SPECTATOR);p.sendMessage("§aZuschauermodus aktiv. /bc spectate zum Beenden.");}
+                else {p.setGameMode(observerOriginalModes.remove(p.getUniqueId()));p.sendMessage("§aZuschauermodus beendet.");}
+            }
             case "setup" -> { openSetup(p); }
             case "spawn" -> {
                 if(args.length<2){p.sendMessage("§e/bc spawn add <1|2> | list | show | remove <1|2> [nummer] | clear <1|2> | ball");break;}
@@ -1029,7 +1283,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                     drawHoops();
                 }
             }
-            case "ball", "start" -> { spawnBall(p.getLocation().add(0, 1.0, 0)); p.sendMessage("§aBasketball gespawnt!"); }
+            case "ball", "start" -> { if(matchActive()){p.sendMessage("§cWährend eines Matches: /bc match stop");break;} spawnBall(p.getLocation().add(0, 1.0, 0)); p.sendMessage("§aBasketball gespawnt!"); }
             case "sethoop" -> {
                 if (args.length < 2 || !List.of("red", "blue").contains(args[1].toLowerCase(Locale.ROOT))) { p.sendMessage("§c/bc sethoop red|blue"); return true; }
                 String side = args[1].toLowerCase(Locale.ROOT);
@@ -1046,7 +1300,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 showHoopOnce(p, side);
                 hoopViewers.add(p.getUniqueId());
             }
-            case "reset" -> { scores.put("red", 0); scores.put("blue", 0); spawnBall(p.getLocation().add(0, 1, 0)); p.sendMessage("§aSpielstand zurückgesetzt."); }
+            case "reset" -> { if(matchActive()){p.sendMessage("§cMatch läuft: /bc match stop");break;} scores.put("red", 0); scores.put("blue", 0); spawnBall(p.getLocation().add(0, 1, 0)); p.sendMessage("§aSpielstand zurückgesetzt."); }
             default -> p.sendMessage("§cUnbekannter Befehl. /bc help");
         }
         return true;
