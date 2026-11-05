@@ -13,3 +13,5 @@ This ZIP is the existing BasketballCraft 2.0 Beta source with an added purple pa
 Particles are only sent to nearby players every 8 ticks. The setting persists across restarts. No world blocks are changed. Maximum supported width/length 250 blocks. This is a visual rectangle around the existing court, not automatically drawn 3-point/center markings.
 
 This project has NOT been compiled or tested against a Paper 1.21.11 server in this environment. Build with the included GitHub Actions workflow. Backup your old plugin and config first.
+
+Glow upgrade: lavender highlights and sparse END_ROD particles. Visually bright, but particles do not emit actual block light.

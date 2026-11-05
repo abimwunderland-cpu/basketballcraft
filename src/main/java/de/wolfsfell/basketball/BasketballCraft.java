@@ -129,17 +129,29 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (y < world.getMinHeight()+1 && arenas.containsKey(activeArena))
             y = Math.min(arenas.get(activeArena)[0].getY(), arenas.get(activeArena)[1].getY()) + 0.13;
         Particle.DustOptions purple = new Particle.DustOptions(Color.fromRGB(177, 60, 255), 1.35f);
-        Particle.DustOptions glow = new Particle.DustOptions(Color.fromRGB(224, 149, 255), 0.9f);
+        Particle.DustOptions glow = new Particle.DustOptions(Color.fromRGB(245, 200, 255), 1.5f);
         for (Player viewer : world.getPlayers()) {
             Location at = viewer.getLocation();
             if (at.getX() < minX-32 || at.getX() > maxX+32 || at.getZ() < minZ-32 || at.getZ() > maxZ+32 || Math.abs(at.getY()-y)>25) continue;
             for (double x=minX; x<=maxX; x+=0.65) {
                 viewer.spawnParticle(Particle.DUST,x,y,minZ,1,0,0,0,0,purple);
                 viewer.spawnParticle(Particle.DUST,x,y,maxZ,1,0,0,0,0,purple);
+                if (((int)((x-minX)/0.65)) % 4 == 0) {
+                    viewer.spawnParticle(Particle.DUST,x,y+0.045,minZ,1,0,0,0,0,glow);
+                    viewer.spawnParticle(Particle.DUST,x,y+0.045,maxZ,1,0,0,0,0,glow);
+                    viewer.spawnParticle(Particle.END_ROD,x,y+0.08,minZ,1,0,0,0,0);
+                    viewer.spawnParticle(Particle.END_ROD,x,y+0.08,maxZ,1,0,0,0,0);
+                }
             }
             for (double z=minZ; z<=maxZ; z+=0.65) {
                 viewer.spawnParticle(Particle.DUST,minX,y,z,1,0,0,0,0,purple);
                 viewer.spawnParticle(Particle.DUST,maxX,y,z,1,0,0,0,0,purple);
+                if (((int)((z-minZ)/0.65)) % 4 == 0) {
+                    viewer.spawnParticle(Particle.DUST,minX,y+0.045,z,1,0,0,0,0,glow);
+                    viewer.spawnParticle(Particle.DUST,maxX,y+0.045,z,1,0,0,0,0,glow);
+                    viewer.spawnParticle(Particle.END_ROD,minX,y+0.08,z,1,0,0,0,0);
+                    viewer.spawnParticle(Particle.END_ROD,maxX,y+0.08,z,1,0,0,0,0);
+                }
             }
             // Gentle upward shimmer at four corners, without excessive particle spam.
             if (neonTick % 24 == 0) for(double x : new double[]{minX,maxX}) for(double z : new double[]{minZ,maxZ})
