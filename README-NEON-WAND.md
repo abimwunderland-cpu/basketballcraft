@@ -1,0 +1,1 @@
+Neon wand: /bc neon wand. Right-click solid block face to add a level-15 invisible LIGHT block adjacent to that face; shift-right-click same block removes it. /bc neon clear clears hand markers. Purple dust particles render near marked blocks. Existing solid blocks are not replaced. Existing automatic /bc neon on/off remains separate. Compile and server-test required.

@@ -111,6 +111,115 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Map<String, Location> restartPoints = new HashMap<>();
     private final Map<String, Location[]> courtBounds = new HashMap<>();
     // Persistent violet neon boundary: server particles (no client resource pack required).
+    // Actual server-side light: invisible vanilla LIGHT blocks, never replace builds.
+    private final Set<String> neonLightPositions = new HashSet<>();
+    private String lightKey(Block b) { return b.getWorld().getName()+":"+b.getX()+":"+b.getY()+":"+b.getZ(); }
+    private void clearNeonLights() {
+        for (String encoded : new HashSet<>(neonLightPositions)) {
+            String[] a = encoded.split(":", 4);
+            if (a.length != 4) continue;
+            World w = Bukkit.getWorld(a[0]);
+            if (w == null) continue;
+            try {
+                Block b = w.getBlockAt(Integer.parseInt(a[1]), Integer.parseInt(a[2]), Integer.parseInt(a[3]));
+                if (b.getType() == Material.LIGHT) b.setType(Material.AIR, false);
+            } catch (NumberFormatException ignored) {}
+        }
+        neonLightPositions.clear();
+        getConfig().set("court.neon.light-positions", new ArrayList<String>());
+        saveConfig();
+    }
+    private void installNeonLights() {
+        clearNeonLights();
+        if (!neonEnabled || activeArena == null) return;
+        Location[] corners = courtBounds.getOrDefault(activeArena, arenas.get(activeArena));
+        if (corners == null || corners.length != 2 || corners[0] == null || corners[1] == null) return;
+        World w = corners[0].getWorld();
+        if (w == null || !w.equals(corners[1].getWorld())) return;
+        int x1 = Math.min(corners[0].getBlockX(), corners[1].getBlockX());
+        int x2 = Math.max(corners[0].getBlockX(), corners[1].getBlockX());
+        int z1 = Math.min(corners[0].getBlockZ(), corners[1].getBlockZ());
+        int z2 = Math.max(corners[0].getBlockZ(), corners[1].getBlockZ());
+        if (x2-x1 < 1 || z2-z1 < 1 || x2-x1 > 250 || z2-z1 > 250) return;
+        int y = Math.min(corners[0].getBlockY(), corners[1].getBlockY());
+        if ((y == 0 || y <= w.getMinHeight()) && arenas.containsKey(activeArena))
+            y = Math.min(arenas.get(activeArena)[0].getBlockY(), arenas.get(activeArena)[1].getBlockY());
+        if (y <= w.getMinHeight() || y >= w.getMaxHeight()) return;
+        for (int x=x1; x<=x2; x+=3) { putNeonLight(w,x,y,z1); putNeonLight(w,x,y,z2); }
+        for (int z=z1; z<=z2; z+=3) { putNeonLight(w,x1,y,z); putNeonLight(w,x2,y,z); }
+        putNeonLight(w,x2,y,z2);
+        getConfig().set("court.neon.light-positions", new ArrayList<>(neonLightPositions));
+        saveConfig();
+    }
+    private void putNeonLight(World w, int x, int y, int z) {
+        Block b = w.getBlockAt(x,y,z);
+        if (b.getType() != Material.AIR && b.getType() != Material.CAVE_AIR) return;
+        org.bukkit.block.data.type.Light light = (org.bukkit.block.data.type.Light) Bukkit.createBlockData(Material.LIGHT);
+        light.setLevel(15);
+        b.setBlockData(light, false);
+        neonLightPositions.add(lightKey(b));
+    }
+    // Hand-placed persistent neon markers. The selected solid block stays untouched.
+    private final Map<String, String> neonMarkers = new HashMap<>(); // solid block -> adjacent light block
+    private void saveNeonMarkers() {
+        getConfig().set("court.neon.markers", new HashMap<>(neonMarkers));
+        saveConfig();
+    }
+    private Block blockFromKey(String encoded) {
+        try {
+            String[] a = encoded.split(":",4);
+            if (a.length != 4) return null;
+            World w = Bukkit.getWorld(a[0]);
+            return w == null ? null : w.getBlockAt(Integer.parseInt(a[1]),Integer.parseInt(a[2]),Integer.parseInt(a[3]));
+        } catch (NumberFormatException ex) { return null; }
+    }
+    private void removeNeonMarker(String key) {
+        String lightKey = neonMarkers.remove(key);
+        if (lightKey != null && !neonMarkers.containsValue(lightKey)) {
+            Block light = blockFromKey(lightKey);
+            if (light != null && light.getType() == Material.LIGHT) light.setType(Material.AIR, false);
+        }
+        saveNeonMarkers();
+    }
+    private void markNeon(Player p, Block selected, org.bukkit.block.BlockFace face) {
+        String selectedKey = lightKey(selected);
+        if (p.isSneaking()) {
+            removeNeonMarker(selectedKey);
+            p.sendMessage("§7Neon-Markierung entfernt.");
+            return;
+        }
+        if (neonMarkers.containsKey(selectedKey)) {p.sendMessage("§eDieser Block ist bereits markiert.");return;}
+        Block light = selected.getRelative(face);
+        if (!light.getType().isAir() && light.getType() != Material.LIGHT) {
+            p.sendMessage("§cNeben dem angeklickten Block muss Luft sein. Klicke eine freie Seite an.");return;
+        }
+        String lk = lightKey(light);
+        if (light.getType() == Material.LIGHT && !neonMarkers.containsValue(lk)) {
+            p.sendMessage("§cDort liegt bereits ein fremder Lichtblock.");return;
+        }
+        if (light.getType().isAir()) {
+            org.bukkit.block.data.type.Light data = (org.bukkit.block.data.type.Light) Bukkit.createBlockData(Material.LIGHT);
+            data.setLevel(15); light.setBlockData(data, false);
+        }
+        neonMarkers.put(selectedKey, lk); saveNeonMarkers();
+        p.sendMessage("§dNeon gesetzt! §7Lichtstärke 15 · Shift-Rechtsklick entfernt.");
+    }
+    private int handNeonTick = 0;
+    private void drawHandNeon() {
+        handNeonTick++;
+        if ((handNeonTick % 8) != 0) return;
+        Particle.DustOptions purple = new Particle.DustOptions(Color.fromRGB(174,55,255),1.2f);
+        for (String encoded : neonMarkers.keySet()) {
+            Block b = blockFromKey(encoded);
+            if (b == null) continue;
+            Location loc = b.getLocation().add(0.5,0.55,0.5);
+            for (Player viewer : b.getWorld().getPlayers()) {
+                if (viewer.getLocation().distanceSquared(loc) > 48*48) continue;
+                viewer.spawnParticle(Particle.DUST,loc,2,0.27,0.27,0.27,0,purple);
+                if ((handNeonTick % 32)==0) viewer.spawnParticle(Particle.END_ROD,loc,1,0.12,0.12,0.12,0);
+            }
+        }
+    }
     private boolean neonEnabled;
     private int neonTick;
     private void drawNeonCourt() {
@@ -129,29 +238,17 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (y < world.getMinHeight()+1 && arenas.containsKey(activeArena))
             y = Math.min(arenas.get(activeArena)[0].getY(), arenas.get(activeArena)[1].getY()) + 0.13;
         Particle.DustOptions purple = new Particle.DustOptions(Color.fromRGB(177, 60, 255), 1.35f);
-        Particle.DustOptions glow = new Particle.DustOptions(Color.fromRGB(245, 200, 255), 1.5f);
+        Particle.DustOptions glow = new Particle.DustOptions(Color.fromRGB(224, 149, 255), 0.9f);
         for (Player viewer : world.getPlayers()) {
             Location at = viewer.getLocation();
             if (at.getX() < minX-32 || at.getX() > maxX+32 || at.getZ() < minZ-32 || at.getZ() > maxZ+32 || Math.abs(at.getY()-y)>25) continue;
             for (double x=minX; x<=maxX; x+=0.65) {
                 viewer.spawnParticle(Particle.DUST,x,y,minZ,1,0,0,0,0,purple);
                 viewer.spawnParticle(Particle.DUST,x,y,maxZ,1,0,0,0,0,purple);
-                if (((int)((x-minX)/0.65)) % 4 == 0) {
-                    viewer.spawnParticle(Particle.DUST,x,y+0.045,minZ,1,0,0,0,0,glow);
-                    viewer.spawnParticle(Particle.DUST,x,y+0.045,maxZ,1,0,0,0,0,glow);
-                    viewer.spawnParticle(Particle.END_ROD,x,y+0.08,minZ,1,0,0,0,0);
-                    viewer.spawnParticle(Particle.END_ROD,x,y+0.08,maxZ,1,0,0,0,0);
-                }
             }
             for (double z=minZ; z<=maxZ; z+=0.65) {
                 viewer.spawnParticle(Particle.DUST,minX,y,z,1,0,0,0,0,purple);
                 viewer.spawnParticle(Particle.DUST,maxX,y,z,1,0,0,0,0,purple);
-                if (((int)((z-minZ)/0.65)) % 4 == 0) {
-                    viewer.spawnParticle(Particle.DUST,minX,y+0.045,z,1,0,0,0,0,glow);
-                    viewer.spawnParticle(Particle.DUST,maxX,y+0.045,z,1,0,0,0,0,glow);
-                    viewer.spawnParticle(Particle.END_ROD,minX,y+0.08,z,1,0,0,0,0);
-                    viewer.spawnParticle(Particle.END_ROD,maxX,y+0.08,z,1,0,0,0,0);
-                }
             }
             // Gentle upward shimmer at four corners, without excessive particle spam.
             if (neonTick % 24 == 0) for(double x : new double[]{minX,maxX}) for(double z : new double[]{minZ,maxZ})
@@ -591,9 +688,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private int greenEnd(Player p) { return greenStart(p) + greenWidth(p) - 1; }
     private boolean green(Player p, int phase) { return phase >= greenStart(p) && phase <= greenEnd(p); }
     private ItemStack wand(String type) {
-        ItemStack item = new ItemStack(type.equals("arena") ? Material.WOODEN_AXE : type.equals("red") ? Material.BLAZE_ROD : type.equals("blue") ? Material.STICK : Material.GOLDEN_HOE);
+        ItemStack item = new ItemStack(type.equals("neon") ? Material.AMETHYST_SHARD : type.equals("arena") ? Material.WOODEN_AXE : type.equals("red") ? Material.BLAZE_ROD : type.equals("blue") ? Material.STICK : Material.GOLDEN_HOE);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName(type.equals("arena") ? "§d§lHallen-Wand" : type.equals("red") ? "§c§lKorb Team 1" : type.equals("blue") ? "§9§lKorb Team 2" : "§e§lCourt-Editor");
+        meta.setDisplayName(type.equals("neon") ? "§d§lNeon-Markierungsstab" : type.equals("arena") ? "§d§lHallen-Wand" : type.equals("red") ? "§c§lKorb Team 1" : type.equals("blue") ? "§9§lKorb Team 2" : "§e§lCourt-Editor");
         meta.getPersistentDataContainer().set(wandKey, PersistentDataType.STRING, type);
         item.setItemMeta(meta); return item;
     }
@@ -616,7 +713,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             getConfig().set(base + ".pos" + (i+1), List.of(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()));
         }
         getConfig().set("active-arena", name); saveConfig();
-        arenas.put(name, new Location[]{a.clone(), b.clone()}); activeArena = name;
+        arenas.put(name, new Location[]{a.clone(), b.clone()}); activeArena = name; installNeonLights();
     }
     private boolean insideArena(Location loc) {
         if (activeArena == null || !arenas.containsKey(activeArena)) return true;
@@ -630,6 +727,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     @Override public void onEnable() {
         saveDefaultConfig();
         neonEnabled = getConfig().getBoolean("court.neon.enabled", false);
+        neonLightPositions.addAll(getConfig().getStringList("court.neon.light-positions"));
+        ConfigurationSection markerSection = getConfig().getConfigurationSection("court.neon.markers");
+        if (markerSection != null) for (String marker : markerSection.getKeys(false)) {
+            // Bukkit YAML sections cannot safely encode coordinate keys with periods, but colons are valid.
+            neonMarkers.put(marker,markerSection.getString(marker,""));
+        }
+        // Clear previous session's invisible light blocks before rebuilding the selected arena.
+        clearNeonLights();
         loadTeamBranding();
         key = new NamespacedKey(this, "basketball");
         Objects.requireNonNull(getCommand("basketball")).setExecutor(this);
@@ -676,10 +781,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         loadRestartPoints();
         loadLifetimeStats();
         loadLeagueDisplay();loadGuideNpcs();
-        ticker = Bukkit.getScheduler().runTaskTimer(this, () -> { step(); drawNeonCourt(); }, 1L, 1L);
+        ticker = Bukkit.getScheduler().runTaskTimer(this, () -> { step(); drawNeonCourt(); drawHandNeon(); }, 1L, 1L);
+        Bukkit.getScheduler().runTaskLater(this, this::installNeonLights, 40L);
         refreshBoards();getLogger().info("BasketballCraft 1.3 enabled. /bc help");
     }
     @Override public void onDisable() {
+        clearNeonLights();
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
         saveLifetimeStats();clearMatchBoards(); restoreVests();
@@ -917,6 +1024,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         Player p = event.getPlayer();
         Action action = event.getAction();
         String wand = wandType(event.getItem());
+        if ("neon".equals(wand) && p.hasPermission("basketball.admin")) {
+            if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
+            if (action == Action.RIGHT_CLICK_BLOCK && event.getClickedBlock() != null) {
+                event.setCancelled(true);
+                markNeon(p,event.getClickedBlock(),event.getBlockFace());
+            }
+            return;
+        }
         if (wand != null && p.hasPermission("basketball.admin")) {
             event.setCancelled(true);
             if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
@@ -1563,7 +1678,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         List<String> options;
         if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","npc","neon");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
@@ -1692,11 +1807,21 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         }
         if(args[0].equalsIgnoreCase("neon")) {
             if(!sender.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
-            if(args.length<2){sender.sendMessage("§d/bc neon on|off|status §7- Lila Neon-Außenlinie");return true;}
+            if(args.length>=2 && args[1].equalsIgnoreCase("wand")) {
+                if (!(sender instanceof Player player)) {sender.sendMessage("Nur im Spiel.");return true;}
+                player.getInventory().addItem(wand("neon"));
+                player.sendMessage("§dNeon-Stab erhalten! §7Rechtsklick markiert, Shift-Rechtsklick entfernt.");return true;
+            }
+            if(args.length>=2 && args[1].equalsIgnoreCase("clear")) {
+                for (String marker : new ArrayList<>(neonMarkers.keySet())) removeNeonMarker(marker);
+                sender.sendMessage("§7Alle manuell gesetzten Neon-Markierungen entfernt.");return true;
+            }
+            if(args.length<2){sender.sendMessage("§d/bc neon wand|clear|on|off|status");return true;}
             if(args[1].equalsIgnoreCase("status")){sender.sendMessage("§dNeon: "+(neonEnabled?"§aan":"§caus")+" §7Arena: "+activeArena);return true;}
             if(!args[1].equalsIgnoreCase("on") && !args[1].equalsIgnoreCase("off")){sender.sendMessage("§e/bc neon on|off|status");return true;}
             if(args[1].equalsIgnoreCase("on") && (activeArena==null || !arenas.containsKey(activeArena))){sender.sendMessage("§cZuerst Arena speichern/auswählen: /bc arena select <name>");return true;}
             neonEnabled=args[1].equalsIgnoreCase("on");getConfig().set("court.neon.enabled",neonEnabled);saveConfig();
+            installNeonLights();
             sender.sendMessage(neonEnabled?"§dNeon-Außenlinie aktiviert! §7Mit /bc arena bounds 1|2 genau abgrenzen.":"§7Neon-Außenlinie deaktiviert.");return true;
         }
         if(args[0].equalsIgnoreCase("board"))return boardCommand(sender,args);
@@ -1911,8 +2036,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                         Location second=p.getLocation().clone();courtBounds.put(activeArena,new Location[]{first,second});
                         String path="court.bounds."+activeArena;getConfig().set(path+".world",first.getWorld().getName());
                         getConfig().set(path+".x1",first.getX());getConfig().set(path+".z1",first.getZ());getConfig().set(path+".x2",second.getX());getConfig().set(path+".z2",second.getZ());saveConfig();
-                        p.sendMessage("§aAußenlinien gespeichert. Ball prallt daran ab.");
-                    }else if(action.equals("clear")){courtBounds.remove(activeArena);getConfig().set("court.bounds."+activeArena,null);saveConfig();p.sendMessage("§eAußenlinien entfernt; Arenaecken gelten wieder.");}
+                        installNeonLights();p.sendMessage("§aAußenlinien gespeichert. Ball prallt daran ab.");
+                    }else if(action.equals("clear")){courtBounds.remove(activeArena);getConfig().set("court.bounds."+activeArena,null);saveConfig();installNeonLights();p.sendMessage("§eAußenlinien entfernt; Arenaecken gelten wieder.");}
                     else if(action.equals("show")){Location[] c=courtBounds.get(activeArena);p.sendMessage(c==null?"§eKeine separaten Außenlinien.":"§aAußenlinien: §f"+c[0].toVector()+" bis "+c[1].toVector());}
                     break;
                 }
@@ -1926,12 +2051,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 else if (sub.equals("select") && args.length >= 3) {
                     String name = args[2].toLowerCase(Locale.ROOT);
                     if (!arenas.containsKey(name)) { p.sendMessage("§cHalle nicht gefunden."); return true; }
-                    activeArena = name; getConfig().set("active-arena", name); saveConfig(); p.sendMessage("§aHalle aktiviert: " + name);
+                    activeArena = name; getConfig().set("active-arena", name); saveConfig(); installNeonLights(); p.sendMessage("§aHalle aktiviert: " + name);
                 } else if (sub.equals("delete") && args.length >= 3) {
                     String name = args[2].toLowerCase(Locale.ROOT);
                     arenas.remove(name); getConfig().set("arenas."+name, null);
                     if (name.equals(activeArena)) { activeArena = null; getConfig().set("active-arena", null); }
-                    saveConfig(); p.sendMessage("§eHalle gelöscht: " + name);
+                    saveConfig(); installNeonLights(); p.sendMessage("§eHalle gelöscht: " + name);
                 } else if (sub.equals("show")) {
                     if (activeArena == null || !arenas.containsKey(activeArena)) { p.sendMessage("§cKeine aktive Halle."); return true; }
                     Location[] corners = arenas.get(activeArena);
