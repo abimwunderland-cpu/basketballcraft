@@ -165,6 +165,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private void announce(String message) { Bukkit.broadcastMessage("§d§l[BasketballCraft] §r" + message); }
     // Persistent league roster; red/blue remain the two internal match slots.
     private final Map<String,String> leagueRoster=new LinkedHashMap<>();
+    private final Map<UUID,String> registeredPlayers=new HashMap<>();
     private String activeLeagueRed="";
     private String activeLeagueBlue="";
     private void loadLeagueRoster(){
@@ -174,6 +175,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             String color=getConfig().getString("registered-teams."+id+".color","");
             if(COLOR_CODES.containsKey(color))leagueRoster.put(id,color);
         }
+        var members=getConfig().getConfigurationSection("league.members");
+        if(members!=null)for(String id:members.getKeys(false))try{registeredPlayers.put(UUID.fromString(id),members.getString(id,""));}catch(IllegalArgumentException ignored){}
         activeLeagueRed=getConfig().getString("league.active.red","");
         activeLeagueBlue=getConfig().getString("league.active.blue","");
     }
@@ -183,11 +186,16 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         saveConfig();
     }
     private boolean chooseLeagueMatchup(String red,String blue){
-        if(red.equalsIgnoreCase(blue)||!leagueRoster.containsKey(red)||!leagueRoster.containsKey(blue))return false;
+        String realRed=null,realBlue=null;
+        for(String team:leagueRoster.keySet()){if(team.equalsIgnoreCase(red))realRed=team;if(team.equalsIgnoreCase(blue))realBlue=team;}
+        if(realRed==null||realBlue==null||realRed.equals(realBlue))return false;
+        red=realRed;blue=realBlue;
         activeLeagueRed=red;activeLeagueBlue=blue;
         getConfig().set("league.active.red",red);getConfig().set("league.active.blue",blue);
         setTeamBranding("red",red,leagueRoster.get(red));
         setTeamBranding("blue",blue,leagueRoster.get(blue));
+        playerTeams.clear();
+        for(var member:registeredPlayers.entrySet()){if(member.getValue().equalsIgnoreCase(red))playerTeams.put(member.getKey(),"red");else if(member.getValue().equalsIgnoreCase(blue))playerTeams.put(member.getKey(),"blue");}
         return true;
     }
     private final Map<String,String> customTeamNames=new HashMap<>();
@@ -308,7 +316,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     private void finishMatch(boolean cancelled) {
         if (matchPhase==MatchPhase.IDLE) return;
-        matchPhase=MatchPhase.FINISHED;stopMatchMusic(); matchPaused=false;
+        matchPhase=MatchPhase.FINISHED;stopMatchMusic(); if(!cancelled)playArenaCue("match_end"); matchPaused=false;
         clearBall(); restoreVests(); restartExclusiveTeam=null; restartDeadlineTick=-1;
         if (cancelled) announce("§cMatch abgebrochen.");
         else {
@@ -1246,12 +1254,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     @EventHandler public void onJoin(PlayerJoinEvent event) { Bukkit.getScheduler().runTaskLater(this,this::refreshBoards,2L); }
     private void drawHoops() {
         for (Player viewer : Bukkit.getOnlinePlayers()) {
-            if (!hoopViewers.contains(viewer.getUniqueId())) continue;
+            if (!hoopViewers.contains(viewer.getUniqueId()) && !matchActive()) continue;
             for (var entry : hoops.entrySet()) {
                 Location center = entry.getValue();
                 if (!center.getWorld().equals(viewer.getWorld()) || center.distanceSquared(viewer.getLocation()) > 48*48) continue;
                 org.bukkit.Particle.DustOptions dust = new org.bukkit.Particle.DustOptions(
-                    entry.getKey().equals("red") ? Color.fromRGB(255, 50, 65) : Color.fromRGB(45, 125, 255), 1.15f);
+                    ARMOR_COLORS.getOrDefault(customTeamColors.getOrDefault(entry.getKey(),"rot"), Color.PURPLE), 1.15f);
                 for (int i = 0; i < 32; i++) {
                     double angle = Math.PI * 2 * i / 32.0;
                     viewer.spawnParticle(Particle.DUST, center.getX() + Math.cos(angle)*hoopRadius,
@@ -1270,10 +1278,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         p.playSound(p, Sound.BLOCK_NOTE_BLOCK_PLING, 0.7f, 1.4f);
     }
     private final Set<UUID> musicMuted=new HashSet<>();
-    private void startMatchMusic(){
-        for(Player p:Bukkit.getOnlinePlayers()) if(!musicMuted.contains(p.getUniqueId()))
-            p.playSound(p.getLocation(),"basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS,0.85f,1f);
+    private final Set<UUID> soundMuted=new HashSet<>();
+    private long lastStingerMillis=0;
+    private void playArenaCue(String key){
+        String id="basketballcraft:"+key;
+        for(Player listener:Bukkit.getOnlinePlayers())if(!musicMuted.contains(listener.getUniqueId()))
+            listener.playSound(listener.getLocation(),id,org.bukkit.SoundCategory.RECORDS,1.0f,1f);
     }
+    private void startMatchMusic(){ playArenaCue("game_music"); }
     private void stopMatchMusic(){
         for(Player p:Bukkit.getOnlinePlayers())p.stopSound("basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS);
     }
@@ -1281,9 +1293,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         String id=dunk?"dunk":"score_"+points;
         // Optional resource-pack sound; vanilla fallback remains audible without the pack.
         String sound=getConfig().getString("audio."+id,"basketballcraft:"+id);
-        for(Player p:location.getWorld().getPlayers()) if(p.getLocation().distanceSquared(location)<55*55) {
-            try {p.playSound(location,sound,org.bukkit.SoundCategory.PLAYERS,0.9f,1f);}
+        for(Player p:location.getWorld().getPlayers()) if(p.getLocation().distanceSquared(location)<55*55 && !soundMuted.contains(p.getUniqueId())) {
+            try {p.playSound(location,sound,org.bukkit.SoundCategory.PLAYERS,1.15f,1f);}
             catch(Exception ignored) {p.playSound(location,Sound.ENTITY_PLAYER_LEVELUP,0.9f,dunk?0.7f:points==4?1.6f:1.1f);}
+        }
+        // Short arena stinger after the basket sound, not continuous music.
+        if(System.currentTimeMillis()-lastStingerMillis>1600){
+            lastStingerMillis=System.currentTimeMillis();
+            Bukkit.getScheduler().runTaskLater(this,()->{if(matchPhase==MatchPhase.LIVE)playArenaCue("basket_stinger");},18L);
         }
     }
     private void score(String side) {
@@ -1481,13 +1498,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3","4","5");case "league"->List.of("create","matchup","delete","set","list");case "music"->List.of("on","off");case "team"->List.of("add","remove","list","clear");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "help"->List.of("1","2","3","4","5");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
-        else if(args.length==4 && args[0].equalsIgnoreCase("team") && args[1].equalsIgnoreCase("add"))options=List.of("1","2");
+        else if(args.length==4 && args[0].equalsIgnoreCase("team") && args[1].equalsIgnoreCase("add"))options=new ArrayList<>(leagueRoster.keySet());
         else if(args.length==3 && (args[0].equalsIgnoreCase("three") || args[0].equalsIgnoreCase("spawn")))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && List.of("select","delete").contains(args[1]))options=new ArrayList<>(arenas.keySet());
         else options=List.of();
@@ -1505,8 +1522,23 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 musicMuted.add(listener.getUniqueId());listener.stopSound("basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS);listener.sendMessage("§7Basketball-Musik ausgeschaltet.");
             }else{
                 musicMuted.remove(listener.getUniqueId());listener.sendMessage("§aBasketball-Musik eingeschaltet.");
-                if(matchPhase==MatchPhase.LIVE)listener.playSound(listener.getLocation(),"basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS,0.85f,1f);
+                listener.sendMessage("§7Musik kommt bei Matchbeginn, Pause, Korb und Ende.");
             }
+            return true;
+        }
+        if(args[0].equalsIgnoreCase("sound")){
+            if(!(sender instanceof Player listener)){sender.sendMessage("Nur Spieler.");return true;}
+            if(args.length>1 && args[1].equalsIgnoreCase("off")){soundMuted.add(listener.getUniqueId());listener.sendMessage("§7Korb-Sounds ausgeschaltet.");}
+            else{soundMuted.remove(listener.getUniqueId());listener.sendMessage("§aKorb-Sounds eingeschaltet.");}
+            return true;
+        }
+        if(args[0].equalsIgnoreCase("matchup")){
+            if(!(sender instanceof Player admin)||!admin.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
+            if(matchActive()){sender.sendMessage("§cMatch zuerst beenden.");return true;}
+            if(args.length<3){sender.sendMessage("§e/bc matchup <team1> <team2>");return true;}
+            String left=args[1].replace('_',' '),right=args[2].replace('_',' ');
+            if(!chooseLeagueMatchup(left,right))sender.sendMessage("§cTeam unbekannt. /bc team list");
+            else sender.sendMessage("§aMatchup: "+teamLabel("red")+" §fvs "+teamLabel("blue")+" §7| Spieler zugeordnet: "+playerTeams.size());
             return true;
         }
         if (args[0].equalsIgnoreCase("score")) {
@@ -1582,29 +1614,54 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 }else p.sendMessage("§e/bc league create <farbe> <name> | matchup <team1> <team2> | list | delete <name>");
             }
             case "team" -> {
-                if(args.length<2){p.sendMessage("§e/bc team add <player> <1|2> | remove <player> | list | clear");break;}
+                if(args.length<2){p.sendMessage("§e/bc team create <name> <farbe> | add <spieler> <team> | remove <spieler> | list | delete <team>");break;}
                 String sub=args[1].toLowerCase(Locale.ROOT);
-                if(sub.equals("list")) {
-                    for(String side:List.of("red","blue")) {
-                        String names=playerTeams.entrySet().stream().filter(x->x.getValue().equals(side)).map(x->Optional.ofNullable(Bukkit.getOfflinePlayer(x.getKey()).getName()).orElse("? ")).reduce((a,b)->a+", "+b).orElse("keine");
-                        p.sendMessage(teamLabel(side)+" §7: §f"+names);
+                if(sub.equals("create") && args.length>=4 && !matchActive()){
+                    String color=args[args.length-1].toLowerCase(Locale.ROOT);
+                    String name=String.join(" ",Arrays.copyOfRange(args,2,args.length-1)).replace('_',' ').trim();
+                    if(!COLOR_CODES.containsKey(color)){p.sendMessage("§cFarben: "+String.join(", ",COLOR_CODES.keySet()));break;}
+                    if(name.isBlank()||name.length()>24){p.sendMessage("§cTeamname 1-24 Zeichen.");break;}
+                    if(leagueRoster.keySet().stream().anyMatch(n->n.equalsIgnoreCase(name))){p.sendMessage("§cName vergeben.");break;}
+                    if(leagueRoster.containsValue(color)){p.sendMessage("§cFarbe bereits vergeben.");break;}
+                    registerLeagueTeam(name,color);p.sendMessage("§aTeam erstellt: "+COLOR_CODES.get(color)+name);
+                }else if(sub.equals("list")){
+                    p.sendMessage("§d§lRegistrierte Teams:");
+                    for(var entry:leagueRoster.entrySet()){
+                        long count=registeredPlayers.values().stream().filter(v->v.equalsIgnoreCase(entry.getKey())).count();
+                        p.sendMessage(COLOR_CODES.getOrDefault(entry.getValue(),"§f")+entry.getKey()+" §7("+entry.getValue()+", "+count+" Spieler)");
                     }
-                } else if(sub.equals("clear") && !matchActive()) {playerTeams.clear();p.sendMessage("§aTeamzuweisungen gelöscht.");}
-                else if(sub.equals("add") && args.length>=4 && !matchActive()) {
-                    Player target=Bukkit.getPlayerExact(args[2]);
-                    if(target==null || !List.of("1","2").contains(args[3])){p.sendMessage("§cSpieler online und Team 1|2 angeben.");break;}
-                    playerTeams.put(target.getUniqueId(),args[3].equals("1")?"red":"blue");
-                    announce("§f"+target.getName()+" §7→ "+teamLabel(playerTeams.get(target.getUniqueId())));
-                } else if(sub.equals("remove") && args.length>=3 && !matchActive()) {
-                    Player target=Bukkit.getPlayerExact(args[2]);if(target!=null)playerTeams.remove(target.getUniqueId());p.sendMessage("§aTeamzuweisung entfernt.");
-                } else p.sendMessage("§cTeam kann während eines Matches nicht geändert werden. /bc team add <spieler> <1|2>");
+                    p.sendMessage("§7Matchup: "+teamLabel("red")+" §7vs "+teamLabel("blue"));
+                }else if(sub.equals("add") && args.length>=4 && !matchActive()){
+                    org.bukkit.OfflinePlayer target=Bukkit.getOfflinePlayer(args[2]);
+                    String name=String.join(" ",Arrays.copyOfRange(args,3,args.length)).replace('_',' ');
+                    String resolved=null;
+                    for(String team:leagueRoster.keySet())if(team.equalsIgnoreCase(name)){resolved=team;break;}
+                    if(resolved==null){p.sendMessage("§cTeam nicht registriert. /bc team list");break;}
+                    registeredPlayers.put(target.getUniqueId(),resolved);
+                    getConfig().set("league.members."+target.getUniqueId(),resolved);saveConfig();
+                    if(resolved.equalsIgnoreCase(activeLeagueRed))playerTeams.put(target.getUniqueId(),"red");
+                    else if(resolved.equalsIgnoreCase(activeLeagueBlue))playerTeams.put(target.getUniqueId(),"blue");
+                    else playerTeams.remove(target.getUniqueId());
+                    p.sendMessage("§a"+args[2]+" ist jetzt in "+resolved);
+                }else if(sub.equals("remove") && args.length>=3 && !matchActive()){
+                    UUID id=Bukkit.getOfflinePlayer(args[2]).getUniqueId();
+                    registeredPlayers.remove(id);playerTeams.remove(id);
+                    getConfig().set("league.members."+id,null);saveConfig();p.sendMessage("§aSpieler entfernt.");
+                }else if(sub.equals("delete") && args.length>=3 && !matchActive()){
+                    String name=String.join(" ",Arrays.copyOfRange(args,2,args.length)).replace('_',' ');
+                    if(name.equalsIgnoreCase(activeLeagueRed)||name.equalsIgnoreCase(activeLeagueBlue)){p.sendMessage("§cAktives Team kann nicht gelöscht werden.");break;}
+                    if(leagueRoster.remove(name)==null){p.sendMessage("§cUnbekanntes Team.");break;}
+                    getConfig().set("registered-teams."+name,null);
+                    registeredPlayers.entrySet().removeIf(entry->{if(!entry.getValue().equalsIgnoreCase(name))return false;getConfig().set("league.members."+entry.getKey(),null);return true;});
+                    saveConfig();p.sendMessage("§aTeam gelöscht.");
+                }else p.sendMessage("§cSyntax: /bc team create <name> <farbe> | add <spieler> <team> | remove <spieler> | list | delete <team>");
             }
             case "match" -> {
                 if(args.length<2){p.sendMessage("§e/bc match start|stop|pause|resume|time <minuten>|status");break;}
                 switch(args[1].toLowerCase(Locale.ROOT)) {
                     case "start" -> beginCountdown(p);
                     case "stop" -> finishMatch(true);
-                    case "pause" -> {if(matchPhase==MatchPhase.LIVE){matchPaused=true;pauseRemaining=Math.max(0,matchEndTick-tick);announce("§eMatch pausiert.");}}
+                    case "pause" -> {if(matchPhase==MatchPhase.LIVE){matchPaused=true;pauseRemaining=Math.max(0,matchEndTick-tick);playArenaCue("match_pause");announce("§eMatch pausiert.");}}
                     case "resume" -> {if(matchPhase==MatchPhase.LIVE && matchPaused){matchPaused=false;matchEndTick=tick+pauseRemaining;announce("§aMatch fortgesetzt.");}}
                     case "status" -> p.sendMessage("§dStatus: §f"+matchPhase+" §7| Teams: "+playerTeams.size()+" §7| "+scores.get("red")+":"+scores.get("blue"));
                     case "time" -> {if(args.length<3 || matchActive()){p.sendMessage("§c/bc match time <1-30> (nur vor Spielstart)");break;}try{int min=Integer.parseInt(args[2]);if(min<1||min>30)throw new NumberFormatException();matchSeconds=min*60;p.sendMessage("§aMatchdauer: "+min+" Minuten");}catch(NumberFormatException ex){p.sendMessage("§c1 bis 30 Minuten eingeben.");}}
