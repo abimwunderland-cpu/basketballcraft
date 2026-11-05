@@ -376,7 +376,21 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         }
         matchBoards.clear(); matchObjectives.clear(); oldBoards.clear(); boardLines.clear();
     }
+    // TAB branding uses registered teams, including players not in the current matchup.
+    private void refreshTabBranding() {
+        String header = "§d§lBASKETBALLCRAFT §7| §f2VS2\n"
+                + "§5Twitch §fWolfsfellTV §8• §cYouTube §fWolfsfellTVHD";
+        String footer = "§6§lSponsored by merged.games\n§7wolfsfell.merged.games";
+        for (Player target : Bukkit.getOnlinePlayers()) {
+            target.setPlayerListHeaderFooter(header, footer);
+            String team = registeredPlayers.get(target.getUniqueId());
+            String color = team == null ? null : leagueRoster.get(team);
+            String prefix = team == null || color == null ? "§7" : COLOR_CODES.getOrDefault(color, "§f") + "[" + team + "] §f";
+            target.setPlayerListName(prefix + target.getName());
+        }
+    }
     private void refreshBoards() {
+        refreshTabBranding();
         int seconds = matchPhase == MatchPhase.LIVE ? Math.max(0, (matchPaused ? pauseRemaining : matchEndTick - tick) / 20) :
             matchPhase == MatchPhase.COUNTDOWN ? Math.max(0, (countdownEndTick-tick)/20) : 0;
         for (Player p : Bukkit.getOnlinePlayers()) {
@@ -414,7 +428,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             desired.put(4,"§5§m--------------");
             desired.put(3,"§d✦ LIVE Twitch WolfsfellTV");
-            desired.put(2,"§7Daily 17 UHR");
+            desired.put(2,"§6Sponsored by merged.games");
             desired.put(1,"§c§lYouTube WolfsfellTVHD");
             Map<Integer,String> previous=boardLines.computeIfAbsent(id,k->new HashMap<>());
             for(var old:new HashMap<>(previous).entrySet()){
@@ -1706,7 +1720,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             +"§6§lSIEGE\n"+leaders(lifetimeWins)
             +"§b§lSTEALS\n"+leaders(lifetimeSteals)
             +"§a§lBLOCKS\n"+leaders(lifetimeBlocks)
-            +"§8━━━━━━━━━━━━━━━━\n§dWolfsfellTV");
+            +"§8━━━━━━━━━━━━━━━━\n§dwolfsfell.merged.games\n§6Sponsored by merged.games");
     }
     private void loadLeagueDisplay(){
         Location loc=getConfig().getLocation("league-board.location");
