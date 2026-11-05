@@ -428,8 +428,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             desired.put(4,"§5§m--------------");
             desired.put(3,"§d✦ LIVE Twitch WolfsfellTV");
-            desired.put(2,"§6Sponsored by merged.games");
-            desired.put(1,"§c§lYouTube WolfsfellTVHD");
+            desired.put(2,"§c§lYouTube WolfsfellTVHD");
+            desired.put(1,"§fwolfsfell.merged.games");
             Map<Integer,String> previous=boardLines.computeIfAbsent(id,k->new HashMap<>());
             for(var old:new HashMap<>(previous).entrySet()){
                 if(!Objects.equals(old.getValue(),desired.get(old.getKey()))){obj.getScoreboard().resetScores(old.getValue());previous.remove(old.getKey());}
