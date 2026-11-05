@@ -163,6 +163,33 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private boolean matchActive() { return matchPhase == MatchPhase.LIVE || matchPhase == MatchPhase.COUNTDOWN; }
     private boolean participantAllowed(Player p) { return !matchActive() || (matchPhase == MatchPhase.LIVE && !matchPaused && playing(p)); }
     private void announce(String message) { Bukkit.broadcastMessage("§d§l[BasketballCraft] §r" + message); }
+    // Persistent league roster; red/blue remain the two internal match slots.
+    private final Map<String,String> leagueRoster=new LinkedHashMap<>();
+    private String activeLeagueRed="";
+    private String activeLeagueBlue="";
+    private void loadLeagueRoster(){
+        leagueRoster.clear();
+        var section=getConfig().getConfigurationSection("registered-teams");
+        if(section!=null)for(String id:section.getKeys(false)){
+            String color=getConfig().getString("registered-teams."+id+".color","");
+            if(COLOR_CODES.containsKey(color))leagueRoster.put(id,color);
+        }
+        activeLeagueRed=getConfig().getString("league.active.red","");
+        activeLeagueBlue=getConfig().getString("league.active.blue","");
+    }
+    private void registerLeagueTeam(String name,String color){
+        leagueRoster.put(name,color);
+        getConfig().set("registered-teams."+name+".color",color);
+        saveConfig();
+    }
+    private boolean chooseLeagueMatchup(String red,String blue){
+        if(red.equalsIgnoreCase(blue)||!leagueRoster.containsKey(red)||!leagueRoster.containsKey(blue))return false;
+        activeLeagueRed=red;activeLeagueBlue=blue;
+        getConfig().set("league.active.red",red);getConfig().set("league.active.blue",blue);
+        setTeamBranding("red",red,leagueRoster.get(red));
+        setTeamBranding("blue",blue,leagueRoster.get(blue));
+        return true;
+    }
     private final Map<String,String> customTeamNames=new HashMap<>();
     private final Map<String,String> customTeamColors=new HashMap<>();
     private static final Map<String,String> COLOR_CODES=Map.of("rot","§c","blau","§9","lila","§d","gruen","§a","gelb","§e","orange","§6","tuerkis","§b","weiss","§f","pink","§d");
@@ -173,6 +200,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         return COLOR_CODES.getOrDefault(color,"§f")+customTeamNames.getOrDefault(side,fallback);
     }
     private void loadTeamBranding(){
+        loadLeagueRoster();
         for(String side:List.of("red","blue")){
             customTeamNames.put(side,getConfig().getString("league."+side+".name",side.equals("red")?"Team 1":"Team 2"));
             customTeamColors.put(side,getConfig().getString("league."+side+".color",side.equals("red")?"rot":"blau"));
@@ -432,6 +460,15 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     private NamespacedKey key;
     private ItemDisplay display;
+    private float visualBallAngle=0f;
+    private void rotateBallVisual(float speed){
+        if(display==null||!display.isValid())return;
+        visualBallAngle=(visualBallAngle+speed)%(float)(Math.PI*2);
+        display.setTransformation(new Transformation(new Vector3f(-0.265f,-0.265f,-0.265f),
+            new AxisAngle4f(visualBallAngle,0.7f,0.3f,0.6f),new Vector3f(0.53f,0.53f,0.53f),new AxisAngle4f()));
+        display.setInterpolationDuration(2);
+    }
+
     private Location ball;
     private Vector velocity = new Vector();
     private UUID carrier;
@@ -793,7 +830,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         shotOrigin = p.getLocation().clone();
         airborne = true;
         scoredThisFlight = false;
-        if (display != null && display.isValid()) display.teleport(ball);
+        if (display != null && display.isValid()) display.teleport(ball); rotateBallVisual(airborne?0.24f:0.10f);
         if (pass) p.playSound(p, Sound.ENTITY_SNOWBALL_THROW, 1f, 1.25f);
     }
     private void placeBall(Player p) {
@@ -939,7 +976,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             if (!p.getUniqueId().equals(dunker) && tick % (p.isSprinting() ? 7 : moving ? 10 : 17) == 0)
                 p.getWorld().playSound(p.getLocation(), Sound.BLOCK_WOOD_HIT, 0.22f, 0.6f);
-            display.teleport(ball);
+            display.teleport(ball); rotateBallVisual(airborne?0.24f:0.10f);
             return;
         }
         if (!airborne) {
@@ -1029,7 +1066,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (velocity.lengthSquared() < 0.0009 && ball.clone().add(0, -0.25, 0).getBlock().getType().isSolid()) {
             velocity.zero(); airborne = false;
         }
-        display.teleport(ball);
+        display.teleport(ball); rotateBallVisual(airborne?0.24f:0.10f);
         if (tick % 3 == 0) {
             for (Player p : ball.getWorld().getPlayers()) {
                 if (participantAllowed(p) && p.getLocation().distanceSquared(ball) < 2.25 && velocity.lengthSquared() < 0.12) { carry(p); break; }
@@ -1198,7 +1235,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             velocity = new Vector(0, -0.17, 0);
             airborne = true; scoredThisFlight = true; passFlight = false;
             pickupLockedPlayer = p.getUniqueId(); pickupLockedUntil = tick + 16;
-            if (display != null && display.isValid()) display.teleport(ball);
+            if (display != null && display.isValid()) display.teleport(ball); rotateBallVisual(airborne?0.24f:0.10f);
             p.sendTitle("§d§lDUNK!", "§a+2 PUNKTE", 0, 22, 8);
             dunker = null; dunkSide = null;
         } else if (tick > dunkEnds || (p.isOnGround() && tick > dunkReadyTick + 3)) {
@@ -1235,7 +1272,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Set<UUID> musicMuted=new HashSet<>();
     private void startMatchMusic(){
         for(Player p:Bukkit.getOnlinePlayers()) if(!musicMuted.contains(p.getUniqueId()))
-            p.playSound(p.getLocation(),"basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS,0.24f,1f);
+            p.playSound(p.getLocation(),"basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS,0.85f,1f);
     }
     private void stopMatchMusic(){
         for(Player p:Bukkit.getOnlinePlayers())p.stopSound("basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS);
@@ -1446,7 +1483,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         List<String> options;
         if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3","4","5");case "league"->List.of("set","list");case "music"->List.of("on","off");case "team"->List.of("add","remove","list","clear");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "help"->List.of("1","2","3","4","5");case "league"->List.of("create","matchup","delete","set","list");case "music"->List.of("on","off");case "team"->List.of("add","remove","list","clear");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
@@ -1468,7 +1505,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 musicMuted.add(listener.getUniqueId());listener.stopSound("basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS);listener.sendMessage("§7Basketball-Musik ausgeschaltet.");
             }else{
                 musicMuted.remove(listener.getUniqueId());listener.sendMessage("§aBasketball-Musik eingeschaltet.");
-                if(matchPhase==MatchPhase.LIVE)listener.playSound(listener.getLocation(),"basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS,0.24f,1f);
+                if(matchPhase==MatchPhase.LIVE)listener.playSound(listener.getLocation(),"basketballcraft:game_music",org.bukkit.SoundCategory.RECORDS,0.85f,1f);
             }
             return true;
         }
@@ -1506,6 +1543,30 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 } else p.sendMessage("§e/bc restart set <1|2> | show");
             }
             case "league" -> {
+                if(args.length>=4 && args[1].equalsIgnoreCase("create") && !matchActive()){
+                    String color=args[2].toLowerCase(Locale.ROOT);
+                    String name=String.join(" ",Arrays.copyOfRange(args,3,args.length)).trim();
+                    if(!COLOR_CODES.containsKey(color)){p.sendMessage("§cUngültige Farbe: "+String.join(", ",COLOR_CODES.keySet()));break;}
+                    if(name.isEmpty()||name.length()>24||name.contains(".")){p.sendMessage("§cName: 1–24 Zeichen, ohne Punkt.");break;}
+                    if(leagueRoster.keySet().stream().anyMatch(x->x.equalsIgnoreCase(name))){p.sendMessage("§cTeamname existiert bereits.");break;}
+                    if(leagueRoster.containsValue(color)){p.sendMessage("§cDiese Farbe ist schon vergeben.");break;}
+                    registerLeagueTeam(name,color);p.sendMessage("§aTeam registriert: "+COLOR_CODES.get(color)+name);break;
+                }
+                if(args.length>=4 && args[1].equalsIgnoreCase("matchup") && !matchActive()){
+                    String left=args[2],right=args[3];
+                    // Team names with spaces can be entered with underscores.
+                    left=left.replace('_',' ');right=right.replace('_',' ');
+                    if(!chooseLeagueMatchup(left,right))p.sendMessage("§cUnbekannte Teams. /bc league list");
+                    else p.sendMessage("§aMatchup: "+teamLabel("red")+" §fvs "+teamLabel("blue"));
+                    break;
+                }
+                if(args.length>=3 && args[1].equalsIgnoreCase("delete") && !matchActive()){
+                    String name=String.join(" ",Arrays.copyOfRange(args,2,args.length));
+                    if(name.equals(activeLeagueRed)||name.equals(activeLeagueBlue)){p.sendMessage("§cAktives Matchup-Team kann nicht gelöscht werden.");break;}
+                    if(leagueRoster.remove(name)==null)p.sendMessage("§cTeam nicht gefunden.");
+                    else{getConfig().set("registered-teams."+name,null);saveConfig();p.sendMessage("§aTeam gelöscht: "+name);}break;
+                }
+
                 if(args.length>=5 && args[1].equalsIgnoreCase("set") && List.of("1","2").contains(args[2]) && !matchActive()){
                     String side=args[2].equals("1")?"red":"blue";
                     String color=args[3].toLowerCase(Locale.ROOT);
@@ -1516,8 +1577,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                     if(name.length()>24){p.sendMessage("§cMaximal 24 Zeichen.");break;}
                     setTeamBranding(side,name,color);p.sendMessage("§aTeam gespeichert: "+teamLabel(side));
                 }else if(args.length>=2 && args[1].equalsIgnoreCase("list")){
-                    p.sendMessage("§dTeam 1: "+teamLabel("red")+" §7| Team 2: "+teamLabel("blue"));
-                }else p.sendMessage("§e/bc league set <1|2> <farbe> <name> §7oder /bc league list");
+                    p.sendMessage("§dAktuelles Matchup: "+teamLabel("red")+" §7vs "+teamLabel("blue"));
+                    for(var entry:leagueRoster.entrySet())p.sendMessage(COLOR_CODES.getOrDefault(entry.getValue(),"§f")+entry.getKey()+" §7("+entry.getValue()+")");
+                }else p.sendMessage("§e/bc league create <farbe> <name> | matchup <team1> <team2> | list | delete <name>");
             }
             case "team" -> {
                 if(args.length<2){p.sendMessage("§e/bc team add <player> <1|2> | remove <player> | list | clear");break;}
