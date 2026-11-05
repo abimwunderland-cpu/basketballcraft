@@ -110,6 +110,43 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Map<UUID, ItemStack> originalChestplates = new HashMap<>();
     private final Map<String, Location> restartPoints = new HashMap<>();
     private final Map<String, Location[]> courtBounds = new HashMap<>();
+    // Persistent violet neon boundary: server particles (no client resource pack required).
+    private boolean neonEnabled;
+    private int neonTick;
+    private void drawNeonCourt() {
+        if (!neonEnabled || activeArena == null || (++neonTick % 8) != 0) return;
+        Location[] corners = courtBounds.getOrDefault(activeArena, arenas.get(activeArena));
+        if (corners == null || corners.length != 2 || corners[0] == null || corners[1] == null) return;
+        World world = corners[0].getWorld();
+        if (world == null || !world.equals(corners[1].getWorld())) return;
+        double minX = Math.min(corners[0].getX(), corners[1].getX());
+        double maxX = Math.max(corners[0].getX(), corners[1].getX());
+        double minZ = Math.min(corners[0].getZ(), corners[1].getZ());
+        double maxZ = Math.max(corners[0].getZ(), corners[1].getZ());
+        if (maxX-minX < 1 || maxZ-minZ < 1 || maxX-minX > 250 || maxZ-minZ > 250) return;
+        double y = Math.min(corners[0].getY(), corners[1].getY()) + 0.13;
+        // Bounds corners are sometimes recorded at Y=0. Use court floor from arena when possible.
+        if (y < world.getMinHeight()+1 && arenas.containsKey(activeArena))
+            y = Math.min(arenas.get(activeArena)[0].getY(), arenas.get(activeArena)[1].getY()) + 0.13;
+        Particle.DustOptions purple = new Particle.DustOptions(Color.fromRGB(177, 60, 255), 1.35f);
+        Particle.DustOptions glow = new Particle.DustOptions(Color.fromRGB(224, 149, 255), 0.9f);
+        for (Player viewer : world.getPlayers()) {
+            Location at = viewer.getLocation();
+            if (at.getX() < minX-32 || at.getX() > maxX+32 || at.getZ() < minZ-32 || at.getZ() > maxZ+32 || Math.abs(at.getY()-y)>25) continue;
+            for (double x=minX; x<=maxX; x+=0.65) {
+                viewer.spawnParticle(Particle.DUST,x,y,minZ,1,0,0,0,0,purple);
+                viewer.spawnParticle(Particle.DUST,x,y,maxZ,1,0,0,0,0,purple);
+            }
+            for (double z=minZ; z<=maxZ; z+=0.65) {
+                viewer.spawnParticle(Particle.DUST,minX,y,z,1,0,0,0,0,purple);
+                viewer.spawnParticle(Particle.DUST,maxX,y,z,1,0,0,0,0,purple);
+            }
+            // Gentle upward shimmer at four corners, without excessive particle spam.
+            if (neonTick % 24 == 0) for(double x : new double[]{minX,maxX}) for(double z : new double[]{minZ,maxZ})
+                viewer.spawnParticle(Particle.DUST,x,y+0.35,z,2,0.08,0.18,0.08,0,glow);
+        }
+    }
+
     private final Map<UUID, Location> courtFirstCorners = new HashMap<>();
     private String restartExclusiveTeam;
     private int restartDeadlineTick = -1;
@@ -580,6 +617,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
 
     @Override public void onEnable() {
         saveDefaultConfig();
+        neonEnabled = getConfig().getBoolean("court.neon.enabled", false);
         loadTeamBranding();
         key = new NamespacedKey(this, "basketball");
         Objects.requireNonNull(getCommand("basketball")).setExecutor(this);
@@ -626,7 +664,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         loadRestartPoints();
         loadLifetimeStats();
         loadLeagueDisplay();loadGuideNpcs();
-        ticker = Bukkit.getScheduler().runTaskTimer(this, this::step, 1L, 1L);
+        ticker = Bukkit.getScheduler().runTaskTimer(this, () -> { step(); drawNeonCourt(); }, 1L, 1L);
         refreshBoards();getLogger().info("BasketballCraft 1.3 enabled. /bc help");
     }
     @Override public void onDisable() {
@@ -1503,7 +1541,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             {"§d§lBasketballCraft §7- Hilfe 2/4", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
             {"§d§lBasketballCraft §7- Hilfe 3/4", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"},
             {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Admin-Zuschauer", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Genau auf Ball zielen + Rechtsklick"},
-            {"§d§lBasketballCraft 1.1 §7- Hilfe 5/5", "§e/bc restart set <1|2> §7- Ball-Resetpunkt setzen", "§e/bc restart show §7- Resetpunkte anzeigen", "§e/bc arena lock|unlock §7- Zuschauer-Feldsperre", "§e/bc arena bounds 1|2 §7- Außenlinien setzen", "§7Ball prallt an Arenagrenzen ab", "§7Rechtsklick auf Ball: Steal (auch Teamkollegen)", "§7Event: kein PvP, Teamwesten Rot/Blau", "§e/bc history [anzahl] §7- Letzte Matches", "§e/bc leaderboard reset CONFIRM §7- Stats löschen"}
+            {"§d§lBasketballCraft 1.1 §7- Hilfe 5/5", "§e/bc restart set <1|2> §7- Ball-Resetpunkt setzen", "§e/bc restart show §7- Resetpunkte anzeigen", "§e/bc arena lock|unlock §7- Zuschauer-Feldsperre", "§e/bc arena bounds 1|2 §7- Außenlinien setzen", "§7Ball prallt an Arenagrenzen ab", "§e/bc neon on|off §7- Lila Neon-Feldrand", "§7Rechtsklick auf Ball: Steal (auch Teamkollegen)", "§7Event: kein PvP, Teamwesten Rot/Blau", "§e/bc history [anzahl] §7- Letzte Matches", "§e/bc leaderboard reset CONFIRM §7- Stats löschen"}
         };
         int idx=Math.max(1,Math.min(5,page))-1;
         for(String line:pages[idx])sender.sendMessage(line);
@@ -1511,9 +1549,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","npc");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","npc","neon");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3","4","5");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
@@ -1639,6 +1677,15 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
             help(sender,args.length>1 ? parsePage(args[1]) : 1);
             return true;
+        }
+        if(args[0].equalsIgnoreCase("neon")) {
+            if(!sender.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
+            if(args.length<2){sender.sendMessage("§d/bc neon on|off|status §7- Lila Neon-Außenlinie");return true;}
+            if(args[1].equalsIgnoreCase("status")){sender.sendMessage("§dNeon: "+(neonEnabled?"§aan":"§caus")+" §7Arena: "+activeArena);return true;}
+            if(!args[1].equalsIgnoreCase("on") && !args[1].equalsIgnoreCase("off")){sender.sendMessage("§e/bc neon on|off|status");return true;}
+            if(args[1].equalsIgnoreCase("on") && (activeArena==null || !arenas.containsKey(activeArena))){sender.sendMessage("§cZuerst Arena speichern/auswählen: /bc arena select <name>");return true;}
+            neonEnabled=args[1].equalsIgnoreCase("on");getConfig().set("court.neon.enabled",neonEnabled);saveConfig();
+            sender.sendMessage(neonEnabled?"§dNeon-Außenlinie aktiviert! §7Mit /bc arena bounds 1|2 genau abgrenzen.":"§7Neon-Außenlinie deaktiviert.");return true;
         }
         if(args[0].equalsIgnoreCase("board"))return boardCommand(sender,args);
         if(args[0].equalsIgnoreCase("npc"))return npcCommand(sender,args);

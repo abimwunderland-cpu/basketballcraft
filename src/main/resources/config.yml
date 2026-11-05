@@ -31,3 +31,8 @@ dunk:
   cost: 35.0
   max-distance: 3.5
   max-angle-degrees: 38.0
+
+# Permanent purple particle border (requires an active arena).
+court:
+  neon:
+    enabled: false
