@@ -34,6 +34,23 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private final Map<UUID, Integer> lifetimeSteals = new HashMap<>();
     private final Map<UUID, Integer> lifetimeBlocks = new HashMap<>();
     private org.bukkit.entity.TextDisplay leagueDisplay;
+    private org.bukkit.entity.TextDisplay teamLeagueDisplay;
+    private final Map<String,Integer> teamLifetimeWins=new HashMap<>();
+    private final Map<String,Integer> teamLifetimePoints=new HashMap<>();
+    private void loadTeamStats(){
+        var data=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(new java.io.File(getDataFolder(),"team-leaderboard.yml"));
+        var teams=data.getConfigurationSection("teams");
+        if(teams!=null)for(String name:teams.getKeys(false)){
+            teamLifetimeWins.put(name,teams.getInt(name+".wins"));
+            teamLifetimePoints.put(name,teams.getInt(name+".points"));
+        }
+    }
+    private void saveTeamStats(){
+        var data=new org.bukkit.configuration.file.YamlConfiguration();
+        var names=new HashSet<String>(teamLifetimeWins.keySet());names.addAll(teamLifetimePoints.keySet());
+        for(String name:names){data.set("teams."+name+".wins",teamLifetimeWins.getOrDefault(name,0));data.set("teams."+name+".points",teamLifetimePoints.getOrDefault(name,0));}
+        try{data.save(new java.io.File(getDataFolder(),"team-leaderboard.yml"));}catch(java.io.IOException e){getLogger().severe("Team-Statistiken speichern fehlgeschlagen: "+e.getMessage());}
+    }
     private final java.util.Map<UUID,String> guideNpcRoles = new java.util.HashMap<>();
     private final java.io.File historyFile = new java.io.File("plugins/BasketballCraft/match-history.yml");
     private boolean staminaEnabled(Player p) { return matchPhase==MatchPhase.LIVE && !matchPaused && playing(p); }
@@ -500,8 +517,16 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             for(var entry:playerBlocks.entrySet())lifetimeBlocks.merge(entry.getKey(),entry.getValue(),Integer::sum);
             int a=scores.getOrDefault("red",0),b=scores.getOrDefault("blue",0);
             if(a!=b){String winner=a>b?"red":"blue";for(var entry:playerTeams.entrySet())if(winner.equals(entry.getValue()))lifetimeWins.merge(entry.getKey(),1,Integer::sum);}
+            // Only registered teams get league records; never count unnamed red/blue placeholders.
+            if(leagueRoster.containsKey(activeLeagueRed) && leagueRoster.containsKey(activeLeagueBlue)
+                    && !activeLeagueRed.equals(activeLeagueBlue)){
+                teamLifetimePoints.merge(activeLeagueRed,a,Integer::sum);
+                teamLifetimePoints.merge(activeLeagueBlue,b,Integer::sum);
+                if(a!=b)teamLifetimeWins.merge(a>b?activeLeagueRed:activeLeagueBlue,1,Integer::sum);
+                saveTeamStats();
+            }
             saveLifetimeStats();
-            recordMatchHistory();updateLeagueDisplay();
+            recordMatchHistory();updateLeagueDisplay();updateTeamLeagueDisplay();
         }
         matchPhase=MatchPhase.IDLE;
         for(Player p:Bukkit.getOnlinePlayers()){restoreSpeed(p);stamina.remove(p.getUniqueId());sprintUnlock.remove(p.getUniqueId());}
@@ -537,7 +562,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         }
         if (matchPhase==MatchPhase.LIVE && !matchPaused && tick>=matchEndTick) finishMatch(false);
         if (tick%20==0) refreshBoards();
-        if(tick%100==0) updateLeagueDisplay();
+        if(tick%100==0){updateLeagueDisplay();updateTeamLeagueDisplay();}
     }
     private void recordScore(String hoopSide, int points) {
         if (matchPhase!=MatchPhase.LIVE) return;
@@ -793,8 +818,8 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             threeLines.put(side, points);
         }
         loadRestartPoints();
-        loadLifetimeStats();
-        loadLeagueDisplay();loadGuideNpcs();
+        loadLifetimeStats();loadTeamStats();
+        loadLeagueDisplay();loadTeamLeagueDisplay();loadGuideNpcs();
         ticker = Bukkit.getScheduler().runTaskTimer(this, () -> { step(); drawNeonCourt(); drawHandNeon(); }, 1L, 1L);
         Bukkit.getScheduler().runTaskLater(this, this::installNeonLights, 40L);
         refreshBoards();getLogger().info("BasketballCraft 1.3 enabled. /bc help");
@@ -803,7 +828,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         clearNeonLights();
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
-        saveLifetimeStats();clearMatchBoards(); restoreVests();
+        saveLifetimeStats();saveTeamStats();clearMatchBoards(); restoreVests();
         for (var entry:observerOriginalModes.entrySet()) {Player p=Bukkit.getPlayer(entry.getKey());if(p!=null)p.setGameMode(entry.getValue());}
         charging.clear(); chargeTicks.clear(); stamina.clear();
         for (Player p : Bukkit.getOnlinePlayers()) restoreSpeed(p);
@@ -1690,9 +1715,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","npc","neon");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","teamboard","npc","neon");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board","teamboard"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
@@ -1744,6 +1769,60 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         });
         getConfig().set("league-board.location",loc);getConfig().set("league-board.uuid",leagueDisplay.getUniqueId().toString());saveConfig();
         updateLeagueDisplay();
+    }
+    private void updateTeamLeagueDisplay(){
+        if(teamLeagueDisplay==null||!teamLeagueDisplay.isValid())return;
+        var names=new HashSet<String>(leagueRoster.keySet());names.addAll(teamLifetimeWins.keySet());names.addAll(teamLifetimePoints.keySet());
+        var ranked=new ArrayList<String>(names);
+        ranked.sort(Comparator.comparingInt((String n)->teamLifetimeWins.getOrDefault(n,0)).reversed()
+            .thenComparing(Comparator.comparingInt((String n)->teamLifetimePoints.getOrDefault(n,0)).reversed())
+            .thenComparing(String.CASE_INSENSITIVE_ORDER));
+        StringBuilder out=new StringBuilder("§d§l✦ TOP TEAMS ✦\n§8━━━━━━━━━━━━━━━━\n§7RANG  TEAM     WINS / PUNKTE\n");
+        int rank=0;
+        for(String name:ranked.stream().limit(8).toList()){
+            String color=COLOR_CODES.getOrDefault(leagueRoster.get(name),"§f");
+            out.append("§e").append(++rank).append(". ").append(color).append(name)
+                .append(" §f").append(teamLifetimeWins.getOrDefault(name,0)).append("W")
+                .append(" §7/ §d").append(teamLifetimePoints.getOrDefault(name,0)).append("P\n");
+        }
+        if(ranked.isEmpty())out.append("§8Noch keine Teams\n");
+        out.append("§8━━━━━━━━━━━━━━━━\n§fwolfsfell.merged.games");
+        teamLeagueDisplay.setText(out.toString());
+    }
+    private void spawnTeamLeagueDisplay(Location loc){
+        if(teamLeagueDisplay!=null&&teamLeagueDisplay.isValid())teamLeagueDisplay.remove();
+        teamLeagueDisplay=loc.getWorld().spawn(loc,org.bukkit.entity.TextDisplay.class,d->{
+            d.setBillboard(org.bukkit.entity.Display.Billboard.FIXED);
+            d.setAlignment(org.bukkit.entity.TextDisplay.TextAlignment.CENTER);
+            d.setLineWidth(300);d.setSeeThrough(false);d.setDefaultBackground(false);
+            d.setBackgroundColor(org.bukkit.Color.fromARGB(215,16,12,29));d.setPersistent(true);
+            d.setTransformation(new org.bukkit.util.Transformation(new org.joml.Vector3f(0,0,0),new org.joml.AxisAngle4f(),new org.joml.Vector3f(1.1f,1.1f,1.1f),new org.joml.AxisAngle4f()));
+        });
+        getConfig().set("team-board.location",loc);
+        getConfig().set("team-board.uuid",teamLeagueDisplay.getUniqueId().toString());saveConfig();
+        updateTeamLeagueDisplay();
+    }
+    private void loadTeamLeagueDisplay(){
+        Location loc=getConfig().getLocation("team-board.location");
+        if(loc==null||loc.getWorld()==null)return;
+        try{UUID id=UUID.fromString(getConfig().getString("team-board.uuid",""));
+            var entity=Bukkit.getEntity(id);if(entity instanceof org.bukkit.entity.TextDisplay d)teamLeagueDisplay=d;
+        }catch(IllegalArgumentException ignored){}
+        if(teamLeagueDisplay==null||!teamLeagueDisplay.isValid())spawnTeamLeagueDisplay(loc);
+        updateTeamLeagueDisplay();
+    }
+    private boolean teamBoardCommand(CommandSender sender,String[] args){
+        if(!(sender instanceof Player p)||!p.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
+        if(args.length<2){p.sendMessage("§e/bc teamboard set|remove|refresh");return true;}
+        switch(args[1].toLowerCase(Locale.ROOT)){
+            case "set"->{Location loc=p.getEyeLocation().add(p.getLocation().getDirection().multiply(3));
+                loc.setPitch(0);loc.setYaw(p.getLocation().getYaw()+180);spawnTeamLeagueDisplay(loc);
+                p.sendMessage("§aTeam-Leaderboard platziert (Wins zuerst, Punkte als Tiebreaker).");}
+            case "remove"->{if(teamLeagueDisplay!=null&&teamLeagueDisplay.isValid())teamLeagueDisplay.remove();
+                teamLeagueDisplay=null;getConfig().set("team-board",null);saveConfig();p.sendMessage("§aTeam-Leaderboard entfernt.");}
+            case "refresh"->{updateTeamLeagueDisplay();p.sendMessage("§aTeam-Leaderboard aktualisiert.");}
+            default->p.sendMessage("§e/bc teamboard set|remove|refresh");
+        }return true;
     }
     private boolean boardCommand(CommandSender sender,String[] args){
         if(!(sender instanceof Player p)||!p.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
@@ -1839,6 +1918,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             sender.sendMessage(neonEnabled?"§dNeon-Außenlinie aktiviert! §7Mit /bc arena bounds 1|2 genau abgrenzen.":"§7Neon-Außenlinie deaktiviert.");return true;
         }
         if(args[0].equalsIgnoreCase("board"))return boardCommand(sender,args);
+        if(args[0].equalsIgnoreCase("teamboard"))return teamBoardCommand(sender,args);
         if(args[0].equalsIgnoreCase("npc"))return npcCommand(sender,args);
         if(args[0].equalsIgnoreCase("music")){
             if(!(sender instanceof Player listener)){sender.sendMessage("Nur Spieler.");return true;}
@@ -1886,7 +1966,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             if(args.length<3 || !args[2].equalsIgnoreCase("CONFIRM")){
                 sender.sendMessage("§cACHTUNG: Löscht alle Gesamtpunkte und Siege! §e/bc leaderboard reset CONFIRM");return true;
             }
-            lifetimePoints.clear();lifetimeWins.clear();lifetimeSteals.clear();lifetimeBlocks.clear();saveLifetimeStats();updateLeagueDisplay();refreshBoards();
+            lifetimePoints.clear();lifetimeWins.clear();lifetimeSteals.clear();lifetimeBlocks.clear();teamLifetimeWins.clear();teamLifetimePoints.clear();saveLifetimeStats();saveTeamStats();updateLeagueDisplay();updateTeamLeagueDisplay();refreshBoards();
             sender.sendMessage("§aLeaderboard zurückgesetzt. Match-History bleibt gespeichert.");return true;
         }
         if (!(sender instanceof Player p)) { sender.sendMessage("Only players can configure the court."); return true; }
