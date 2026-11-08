@@ -397,7 +397,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private void refreshTabBranding() {
         String header = "§d§lBASKETBALLCRAFT §7| §f2VS2\n"
                 + "§5Twitch §fWolfsfellTV §8• §cYouTube §fWolfsfellTVHD";
-        String footer = "§6§lSponsored by merged.games\n§7wolfsfell.merged.games";
+        String footer = "§f188.245.248.95:39043";
         for (Player target : Bukkit.getOnlinePlayers()) {
             target.setPlayerListHeaderFooter(header, footer);
             String team = registeredPlayers.get(target.getUniqueId());
@@ -421,11 +421,11 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             var obj=matchObjectives.get(id);
             Map<Integer,String> desired=new LinkedHashMap<>();
-            boolean live=matchActive() && playing(p);
+            boolean live=matchActive() && (playing(p) || observerOriginalModes.containsKey(id));
             if(live){
                 desired.put(15,"§5§m----------------");
-                desired.put(14,"§d§lBASKETBALL EVENT");
-                desired.put(13,"§7Zeit §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60));
+                desired.put(14,observerOriginalModes.containsKey(id)?"§d§lLIVE ZUSCHAUER":"§d§lBASKETBALL EVENT");
+                desired.put(13,"§7Zeit §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)+(matchPaused?" §ePAUSE":""));
                 desired.put(12,"§dWUNDERLEAGUE");
                 desired.put(11,teamLabel("red")+" §f"+scores.getOrDefault("red",0)+" §7: "+teamLabel("blue")+" §f"+scores.getOrDefault("blue",0));
                 desired.put(10,"§d§lTOP 3 SCORER");
@@ -446,7 +446,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             desired.put(4,"§5§m--------------");
             desired.put(3,"§d✦ LIVE Twitch WolfsfellTV");
             desired.put(2,"§c§lYouTube WolfsfellTVHD");
-            desired.put(1,"§fwolfsfell.merged.games");
+            desired.put(1,"§f188.245.248.95:39043");
             Map<Integer,String> previous=boardLines.computeIfAbsent(id,k->new HashMap<>());
             for(var old:new HashMap<>(previous).entrySet()){
                 if(!Objects.equals(old.getValue(),desired.get(old.getKey()))){obj.getScoreboard().resetScores(old.getValue());previous.remove(old.getKey());}
@@ -916,7 +916,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private boolean attemptDunk(Player p) {
         if (!p.getUniqueId().equals(carrier) || dunker != null) return false;
         if (tick > jumpWindow.getOrDefault(p.getUniqueId(), -100) ||
-                tick > sprintRecent.getOrDefault(p.getUniqueId(), -100) + 12 || energy(p) < 70) return false;
+                tick > sprintRecent.getOrDefault(p.getUniqueId(), -100) + 12 || energy(p) < getConfig().getDouble("dunk.minimum-energy", 50.0)) return false;
         Location chosen = null; String side = null;
         Vector forward = p.getLocation().getDirection().setY(0);
         if (forward.lengthSquared() < 0.01) return false;
@@ -1128,7 +1128,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if(originalChestplates.containsKey(event.getPlayer().getUniqueId())) event.getPlayer().getInventory().setChestplate(originalChestplates.remove(event.getPlayer().getUniqueId()));
         if (matchPhase==MatchPhase.LIVE && playing(event.getPlayer())) {matchPaused=true;pauseRemaining=Math.max(0,matchEndTick-tick);announce("§eSpiel pausiert: "+event.getPlayer().getName()+" hat den Server verlassen.");}
         observerOriginalModes.remove(event.getPlayer().getUniqueId());
-        matchBoards.remove(event.getPlayer().getUniqueId());oldBoards.remove(event.getPlayer().getUniqueId());matchObjectives.remove(event.getPlayer().getUniqueId());
+        matchBoards.remove(event.getPlayer().getUniqueId());oldBoards.remove(event.getPlayer().getUniqueId());matchObjectives.remove(event.getPlayer().getUniqueId());boardLines.remove(event.getPlayer().getUniqueId());
  hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); lastHorizontalMove.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
@@ -1706,7 +1706,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             {"§d§lBasketballCraft 0.8.3 §7- Hilfe 1/4", "§e/bc help [1-4] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc spawn add <1|2> §7- Teamspawn an eigener Position", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
             {"§d§lBasketballCraft §7- Hilfe 2/4", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
             {"§d§lBasketballCraft §7- Hilfe 3/4", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"},
-            {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Admin-Zuschauer", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Genau auf Ball zielen + Rechtsklick"},
+            {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Live-Zuschauer mit Spielstand und Zeit", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Genau auf Ball zielen + Rechtsklick"},
             {"§d§lBasketballCraft 1.1 §7- Hilfe 5/5", "§e/bc restart set <1|2> §7- Ball-Resetpunkt setzen", "§e/bc restart show §7- Resetpunkte anzeigen", "§e/bc arena lock|unlock §7- Zuschauer-Feldsperre", "§e/bc arena bounds 1|2 §7- Außenlinien setzen", "§7Ball prallt an Arenagrenzen ab", "§e/bc neon on|off §7- Lila Neon-Feldrand", "§7Rechtsklick auf Ball: Steal (auch Teamkollegen)", "§7Event: kein PvP, Teamwesten Rot/Blau", "§e/bc history [anzahl] §7- Letzte Matches", "§e/bc leaderboard reset CONFIRM §7- Stats löschen"}
         };
         int idx=Math.max(1,Math.min(5,page))-1;
@@ -1745,7 +1745,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             +"§6§lSIEGE\n"+leaders(lifetimeWins)
             +"§b§lSTEALS\n"+leaders(lifetimeSteals)
             +"§a§lBLOCKS\n"+leaders(lifetimeBlocks)
-            +"§8━━━━━━━━━━━━━━━━\n§dwolfsfell.merged.games\n§6Sponsored by merged.games");
+            +"§8━━━━━━━━━━━━━━━━\n§f188.245.248.95:39043");
     }
     private void loadLeagueDisplay(){
         Location loc=getConfig().getLocation("league-board.location");
@@ -1786,7 +1786,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 .append(" §7/ §d").append(teamLifetimePoints.getOrDefault(name,0)).append("P\n");
         }
         if(ranked.isEmpty())out.append("§8Noch keine Teams\n");
-        out.append("§8━━━━━━━━━━━━━━━━\n§fwolfsfell.merged.games");
+        out.append("§8━━━━━━━━━━━━━━━━\n§f188.245.248.95:39043");
         teamLeagueDisplay.setText(out.toString());
     }
     private void spawnTeamLeagueDisplay(Location loc){
@@ -2073,8 +2073,16 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 }
             }
             case "spectate" -> {
-                if(!observerOriginalModes.containsKey(p.getUniqueId())) {observerOriginalModes.put(p.getUniqueId(),p.getGameMode());p.setGameMode(GameMode.SPECTATOR);p.sendMessage("§aZuschauermodus aktiv. /bc spectate zum Beenden.");}
-                else {p.setGameMode(observerOriginalModes.remove(p.getUniqueId()));p.sendMessage("§aZuschauermodus beendet.");}
+                if(!observerOriginalModes.containsKey(p.getUniqueId())) {
+                    if(playing(p) && matchActive()) {p.sendMessage("§cAktive Spieler können während eines Matches nicht zuschauen.");break;}
+                    observerOriginalModes.put(p.getUniqueId(),p.getGameMode());
+                    p.setGameMode(GameMode.SPECTATOR);
+                    p.sendMessage("§aLive-Zuschauer aktiv! §7Spielstand und Restzeit rechts. §e/bc spectate §7zum Beenden.");
+                } else {
+                    p.setGameMode(observerOriginalModes.remove(p.getUniqueId()));
+                    p.sendMessage("§aZuschauermodus beendet.");
+                }
+                refreshBoards();
             }
             case "setup" -> { openSetup(p); }
             case "spawn" -> {

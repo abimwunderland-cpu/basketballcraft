@@ -1,5 +1,5 @@
 name: BasketballCraft
-version: '2.0.0-beta'
+version: '2.0.2-spectator-source'
 main: de.wolfsfell.basketball.BasketballCraft
 api-version: '1.21'
 author: WolfsfellTV
