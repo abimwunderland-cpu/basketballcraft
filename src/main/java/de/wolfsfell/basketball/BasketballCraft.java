@@ -24,6 +24,90 @@ import org.joml.Vector3f;
 import java.util.*;
 
 public final class BasketballCraft extends JavaPlugin implements Listener, TabExecutor {
+    // Streetball V3: isolated arena snapshot, same physics and ball as classic mode.
+    private boolean streetMode=false, streetSuddenDeath=false, streetCleared=true;
+    private String streetName="default", streetLastTeam=null;
+    private int streetTarget=5, streetDuration=300, streetShotClock=20, streetShotDeadline=0;
+    private final Map<String,Location> streetSpawns=new HashMap<>();
+    private final Map<String,Location> classicHoopsBackup=new HashMap<>();
+    private final Map<String,List<Location>> classicSpawnsBackup=new HashMap<>();
+    private final Map<String,List<Location>> classicThreeBackup=new HashMap<>();
+    private Location classicBallBackup; private String classicArenaBackup;
+    private final Map<String,Location> streetThree=new HashMap<>();
+    private void streetPossession(String side, boolean clearNeeded){
+        streetLastTeam=side;streetCleared=!clearNeeded;streetShotDeadline=tick+streetShotClock*20;
+    }
+    private void streetRestore(){
+        if(!streetMode)return;
+        hoops.clear();hoops.putAll(classicHoopsBackup);
+        teamSpawns.clear();for(var e:classicSpawnsBackup.entrySet())teamSpawns.put(e.getKey(),new ArrayList<>(e.getValue()));
+        threeLines.clear();for(var e:classicThreeBackup.entrySet())threeLines.put(e.getKey(),new ArrayList<>(e.getValue()));
+        ballSpawn=classicBallBackup;activeArena=classicArenaBackup;streetMode=false;streetSuddenDeath=false;
+    }
+    private boolean streetOutside(Player p){
+        Location h=hoops.get("red");if(h==null || h.getWorld()!=p.getWorld())return false;
+        double dist=p.getLocation().distanceSquared(new Location(h.getWorld(),h.getX(),p.getY(),h.getZ()));
+        return dist>=Math.pow(getConfig().getDouble("street.three-distance",8.0),2);
+    }
+    private void streetTick(){
+        if(!streetMode || matchPhase!=MatchPhase.LIVE || matchPaused)return;
+        if(carrier!=null){Player p=Bukkit.getPlayer(carrier);
+            if(p!=null && !streetCleared && streetLastTeam!=null && streetLastTeam.equals(playerTeams.get(carrier)) && streetOutside(p)){
+                streetCleared=true;p.sendActionBar("§a§lCLEARED! §7Du darfst werfen.");
+            }
+        }
+        if(streetShotClock>0 && tick>=streetShotDeadline){
+            String next=opposite(streetLastTeam==null?"red":streetLastTeam);
+            Location loc=streetSpawns.get(next);
+            if(loc!=null){spawnBall(loc.clone().add(0,0.5,0));restartExclusiveTeam=next;restartDeadlineTick=-1;streetPossession(next,false);announce("§cSHOT CLOCK! §7Ballbesitz: "+teamLabel(next));}
+        }
+    }
+    private boolean streetCommand(CommandSender sender,String[] args){
+        if(args.length==1){sender.sendMessage("§d/bc street create <name> | hoop | spawn 1|2 | three | bounds 1|2 | player 1|2 <name> | target <punkte> | time <sek> | shotclock <sek> | start | stop | status");return true;}
+        if(!sender.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
+        String sub=args[1].toLowerCase(Locale.ROOT);
+        if(sub.equals("status")){sender.sendMessage("§dStreetball §f"+streetName+" §7| Ziel "+streetTarget+" | Zeit "+streetDuration+"s | Shotclock "+streetShotClock+"s | "+(streetMode?"aktiv":"inaktiv"));return true;}
+        if(sub.equals("stop")){if(streetMode){finishMatch(true);streetRestore();}sender.sendMessage("§7Streetball beendet.");return true;}
+        if(matchActive()){sender.sendMessage("§cErst das laufende Spiel beenden.");return true;}
+        if(sub.equals("create") && args.length>=3){streetName=args[2].replaceAll("[^a-zA-Z0-9_-]","");if(streetName.isEmpty())streetName="default";sender.sendMessage("§aStreet-Arena: "+streetName);return true;}
+        if(List.of("target","time","shotclock").contains(sub) && args.length>=3){
+            try{int n=Integer.parseInt(args[2]);if(n<0 || n>3600 || (sub.equals("target")&&n==0))throw new NumberFormatException();
+                if(sub.equals("target"))streetTarget=n;else if(sub.equals("time"))streetDuration=n;else streetShotClock=n;
+                sender.sendMessage("§a"+sub+" = "+n);return true;
+            }catch(NumberFormatException ex){sender.sendMessage("§cUngültige Zahl (0-3600, Ziel mindestens 1).");return true;}
+        }
+        if(sub.equals("player") && args.length>=4){
+            Player target=Bukkit.getPlayerExact(args[3]);if(target==null){sender.sendMessage("§cSpieler nicht online.");return true;}
+            String side=args[2].equals("1")?"red":args[2].equals("2")?"blue":null;
+            if(side==null){sender.sendMessage("§c1 oder 2.");return true;}
+            playerTeams.entrySet().removeIf(e->side.equals(e.getValue()) || e.getKey().equals(target.getUniqueId()));
+            playerTeams.put(target.getUniqueId(),side);sender.sendMessage("§a"+target.getName()+" ist Spieler "+args[2]);return true;
+        }
+        if(!(sender instanceof Player p)){sender.sendMessage("§cNur im Spiel markieren.");return true;}
+        if(sub.equals("hoop")){getConfig().set("street."+streetName+".hoop",p.getLocation());saveConfig();p.sendMessage("§aStreet-Korb markiert (Position des Rings!).");return true;}
+        if(sub.equals("spawn") && args.length>=3 && List.of("1","2").contains(args[2])){getConfig().set("street."+streetName+".spawn"+args[2],p.getLocation());saveConfig();p.sendMessage("§aSpieler-Spawn "+args[2]+" gespeichert.");return true;}
+        if(sub.equals("three")){getConfig().set("street."+streetName+".three",p.getLocation());saveConfig();p.sendMessage("§aDreierlinie-Referenz markiert. Abstand zum Korb bestimmt die Grenze.");return true;}
+        if(sub.equals("bounds") && args.length>=3 && List.of("1","2").contains(args[2])){getConfig().set("street."+streetName+".bound"+args[2],p.getLocation());saveConfig();p.sendMessage("§aFeld-Ecke "+args[2]+" gespeichert.");return true;}
+        if(sub.equals("start")){
+            String base="street."+streetName+".";
+            Location hoop=getConfig().getLocation(base+"hoop"),a=getConfig().getLocation(base+"spawn1"),b=getConfig().getLocation(base+"spawn2");
+            if(hoop==null||a==null||b==null||hoop.getWorld()!=a.getWorld()||a.getWorld()!=b.getWorld()){p.sendMessage("§cHoop und beide Spawns in derselben Welt markieren.");return true;}
+            if(playerTeams.size()!=2||!playerTeams.containsValue("red")||!playerTeams.containsValue("blue")){p.sendMessage("§cZwei Spieler mit /bc street player 1|2 <name> eintragen.");return true;}
+            classicHoopsBackup.clear();classicHoopsBackup.putAll(hoops);classicSpawnsBackup.clear();for(var e:teamSpawns.entrySet())classicSpawnsBackup.put(e.getKey(),new ArrayList<>(e.getValue()));
+            classicThreeBackup.clear();for(var e:threeLines.entrySet())classicThreeBackup.put(e.getKey(),new ArrayList<>(e.getValue()));
+            classicBallBackup=ballSpawn;classicArenaBackup=activeArena;
+            hoops.clear();hoops.put("red",hoop);teamSpawns.put("red",new ArrayList<>(List.of(a)));teamSpawns.put("blue",new ArrayList<>(List.of(b)));
+            ballSpawn=a;threeLines.clear();activeArena=null;streetSpawns.put("red",a);streetSpawns.put("blue",b);
+            Location three=getConfig().getLocation(base+"three");if(three!=null && three.getWorld()==hoop.getWorld())getConfig().set("street.three-distance",Math.hypot(three.getX()-hoop.getX(),three.getZ()-hoop.getZ()));
+            streetMode=true;streetSuddenDeath=false;streetCleared=true;streetLastTeam="red";
+            matchSeconds=streetDuration;eventAdmin=p.getUniqueId();scores.put("red",0);scores.put("blue",0);playerPoints.clear();playerSteals.clear();playerBlocks.clear();playerAssists.clear();
+            clearBall();teleportTeams();dressTeams();restartExclusiveTeam=null;restartDeadlineTick=-1;lastFinalCountdownSecond=-1;
+            matchPhase=MatchPhase.COUNTDOWN;countdownEndTick=tick+100;matchPaused=false;
+            announce("§d§lSTREETBALL 1VS1! §7Start in 5 Sekunden. First to "+streetTarget);
+            refreshBoards();return true;
+        }
+        sender.sendMessage("§e/bc street (Hilfe)");return true;
+    }
     // Event match state. One active arena/match per server (same scope as legacy ball).
     private enum MatchPhase { IDLE, COUNTDOWN, LIVE, FINISHED }
     private MatchPhase matchPhase = MatchPhase.IDLE;
@@ -421,12 +505,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             }
             var obj=matchObjectives.get(id);
             Map<Integer,String> desired=new LinkedHashMap<>();
-            boolean live=matchActive() && playing(p);
+            boolean live=matchActive() && (playing(p) || observerOriginalModes.containsKey(id));
             if(live){
                 desired.put(15,"§5§m----------------");
-                desired.put(14,"§d§lBASKETBALL EVENT");
-                desired.put(13,"§7Zeit §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60));
-                desired.put(12,"§dWUNDERLEAGUE");
+                desired.put(14,observerOriginalModes.containsKey(id)?"§d§lLIVE ZUSCHAUER":"§d§lBASKETBALL EVENT");
+                desired.put(13,"§7Zeit §f"+String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)+(matchPaused?" §ePAUSE":""));
+                desired.put(12,streetMode?"§dSTREETBALL 1VS1":"§dWUNDERLEAGUE");
+                if(streetMode)desired.put(6,"§eShotclock §f"+(streetShotClock==0?"AUS":Math.max(0,(streetShotDeadline-tick+19)/20)+"s")+(streetSuddenDeath?" §cGOLDEN":""));
                 desired.put(11,teamLabel("red")+" §f"+scores.getOrDefault("red",0)+" §7: "+teamLabel("blue")+" §f"+scores.getOrDefault("blue",0));
                 desired.put(10,"§d§lTOP 3 SCORER");
                 var top=playerPoints.entrySet().stream().sorted((a,b)->Integer.compare(b.getValue(),a.getValue())).limit(3).toList();
@@ -529,6 +614,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             recordMatchHistory();updateLeagueDisplay();updateTeamLeagueDisplay();
         }
         matchPhase=MatchPhase.IDLE;
+        streetRestore();
         for(Player p:Bukkit.getOnlinePlayers()){restoreSpeed(p);stamina.remove(p.getUniqueId());sprintUnlock.remove(p.getUniqueId());}
         refreshBoards();
     }
@@ -537,6 +623,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             if (tick>=countdownEndTick) {
                 matchPhase=MatchPhase.LIVE;startMatchMusic(); matchEndTick=tick+matchSeconds*20;
                 announce("§a§lTIP-OFF! §7Das Spiel läuft!");
+                if(streetMode){Location start=streetSpawns.get("red");if(start!=null)spawnBall(start.clone().add(0,0.5,0));restartExclusiveTeam="red";streetPossession("red",false);}
             } else if ((countdownEndTick-tick)%20==0) {
                 int sec=(countdownEndTick-tick)/20;
                 for (UUID id:playerTeams.keySet()) { Player p=Bukkit.getPlayer(id); if(p!=null)p.sendTitle("§e"+sec,"§7Bereit machen",0,18,1); }
@@ -560,7 +647,10 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                     announce("§c10 Sekunden abgelaufen! §7Ballbesitz wechselt zu "+teamLabel(next));}
             }
         }
-        if (matchPhase==MatchPhase.LIVE && !matchPaused && tick>=matchEndTick) finishMatch(false);
+        if (matchPhase==MatchPhase.LIVE && !matchPaused && tick>=matchEndTick) {
+            if(streetMode && scores.getOrDefault("red",0).equals(scores.getOrDefault("blue",0))){if(!streetSuddenDeath){streetSuddenDeath=true;announce("§6§lSUDDEN DEATH! §7Nächster Korb gewinnt!");}matchEndTick=tick+1200;}
+            else finishMatch(false);
+        }
         if (tick%20==0) refreshBoards();
         if(tick%100==0){updateLeagueDisplay();updateTeamLeagueDisplay();}
     }
@@ -579,6 +669,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         // hoop-side is the conceding side; stored explicitly by score() below.
         Bukkit.getScheduler().runTaskLater(this, ()->{
             if(matchPhase!=MatchPhase.LIVE)return;
+            if(streetMode){String side=streetLastTeam;Location point=streetSpawns.get(side);if(point!=null){teleportTeams();spawnBall(point.clone().add(0,0.5,0));restartExclusiveTeam=side;restartDeadlineTick=-1;streetPossession(side,false);}return;}
             String side=pendingRestartSide;
             Location point=restartPoints.getOrDefault(side,ballSpawn);
             if(point!=null){spawnBall(point.clone().add(0,0.5,0));restartExclusiveTeam=side;restartDeadlineTick=tick+200;announce("§eBallbesitz: "+teamLabel(side)+" §7(10 Sekunden)");}
@@ -825,6 +916,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         refreshBoards();getLogger().info("BasketballCraft 1.3 enabled. /bc help");
     }
     @Override public void onDisable() {
+        streetRestore();
         clearNeonLights();
         if (ticker != null) ticker.cancel();
         if (display != null && display.isValid()) display.remove();
@@ -876,6 +968,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if(restartExclusiveTeam!=null && !restartExclusiveTeam.equals(playerTeams.get(p.getUniqueId())))return;
         restartExclusiveTeam=null; restartDeadlineTick=-1;
         carrier = p.getUniqueId();
+        if(streetMode && matchPhase==MatchPhase.LIVE){String side=playerTeams.get(p.getUniqueId());if(side!=null && !side.equals(streetLastTeam))streetPossession(side,true);}
         possessionProtection.put(p.getUniqueId(),tick+12);
         airborne = false; velocity.zero(); passFlight = false; intendedReceiver = null;
         charging.remove(p.getUniqueId()); chargeTicks.remove(p.getUniqueId());
@@ -1128,7 +1221,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         if(originalChestplates.containsKey(event.getPlayer().getUniqueId())) event.getPlayer().getInventory().setChestplate(originalChestplates.remove(event.getPlayer().getUniqueId()));
         if (matchPhase==MatchPhase.LIVE && playing(event.getPlayer())) {matchPaused=true;pauseRemaining=Math.max(0,matchEndTick-tick);announce("§eSpiel pausiert: "+event.getPlayer().getName()+" hat den Server verlassen.");}
         observerOriginalModes.remove(event.getPlayer().getUniqueId());
-        matchBoards.remove(event.getPlayer().getUniqueId());oldBoards.remove(event.getPlayer().getUniqueId());matchObjectives.remove(event.getPlayer().getUniqueId());
+        matchBoards.remove(event.getPlayer().getUniqueId());oldBoards.remove(event.getPlayer().getUniqueId());matchObjectives.remove(event.getPlayer().getUniqueId());boardLines.remove(event.getPlayer().getUniqueId());
  hoopViewers.remove(event.getPlayer().getUniqueId()); restoreSpeed(event.getPlayer()); stamina.remove(event.getPlayer().getUniqueId()); lastHorizontalMove.remove(event.getPlayer().getUniqueId()); exhaustedMoveAttempt.remove(event.getPlayer().getUniqueId()); grounded.remove(event.getPlayer().getUniqueId()); jumpWindow.remove(event.getPlayer().getUniqueId()); charging.remove(event.getPlayer().getUniqueId()); chargeTicks.remove(event.getPlayer().getUniqueId()); dropCarrier(event.getPlayer()); }
     @EventHandler public void onDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         if (event.getEntity().getUniqueId().equals(carrier)) {
@@ -1155,6 +1248,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     private void step() {
         tick++;
         updateMatch();
+        streetTick();
         updateStamina();
         updateDunk();
         if(tick%5==0 && matchPhase==MatchPhase.LIVE){
@@ -1338,13 +1432,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                         ? getConfig().getDouble("stamina.walk-with-ball-per-second", 3.5)
                         : getConfig().getDouble("stamina.walk-per-second", 2.5);
                 }
-                value -= drain / 20.0;
+                value -= drain * (streetMode?0.3:1.0) / 20.0;
             } else if (p.isOnGround()) {
                 // Standing still is the ONLY way to gain stamina.
                 double regen = getConfig().getDouble("stamina.idle-regen-per-second", 14.0);
                 if (id.equals(carrier)) regen *= getConfig().getDouble("stamina.ball-regen-multiplier", 0.6);
                 else regen *= getConfig().getDouble("stamina.no-ball-regen-multiplier", 1.35);
-                value += regen / 20.0;
+                value += regen * (streetMode?1.5:1.0) / 20.0;
             }
             value = Math.max(0.0, Math.min(100.0, value));
             if (value <= 0.01) {
@@ -1448,9 +1542,12 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 p.getLocation().getY() + 2.15 >= hoop.getY() && p.getLocation().getY() <= hoop.getY() + 0.4) {
             lastShooter = p.getUniqueId(); shotOrigin = p.getLocation().clone();
             // Dunk is worth two, regardless of the starting distance.
-            if (matchPhase==MatchPhase.LIVE && !opposite(dunkSide).equals(playerTeams.get(p.getUniqueId()))) {dunker=null;dunkSide=null;return;}
-            scores.merge(matchPhase==MatchPhase.LIVE?opposite(dunkSide):dunkSide, 2, Integer::sum);
-            recordScore(dunkSide,2);pendingRestartSide=dunkSide;afterScore();
+            if (matchPhase==MatchPhase.LIVE && !streetMode && !opposite(dunkSide).equals(playerTeams.get(p.getUniqueId()))) {dunker=null;dunkSide=null;return;}
+            if(streetMode && !streetCleared){p.sendMessage("§cErst hinter die Dreierlinie clearen!");dunker=null;dunkSide=null;return;}
+            String dunkScorer=playerTeams.get(p.getUniqueId());
+            scores.merge(streetMode?dunkScorer:(matchPhase==MatchPhase.LIVE?opposite(dunkSide):dunkSide), 2, Integer::sum);
+            if(streetMode){playerPoints.merge(p.getUniqueId(),2,Integer::sum);streetPossession(dunkScorer,false);}else recordScore(dunkSide,2);pendingRestartSide=dunkSide;afterScore();
+            if(streetMode && (scores.get(dunkScorer)>=streetTarget || streetSuddenDeath)){finishMatch(false);return;}
             Bukkit.broadcastMessage("§d§l🏀 DUNK! §f" + p.getName() + " §7(+2) §cROT " + scores.get("red") + " §7- §9" + scores.get("blue") + " BLAU");
             playScoreSound(hoop,2,true);
             hoop.getWorld().spawnParticle(Particle.CRIT, hoop, 24, 0.5, 0.2, 0.5, 0.1);
@@ -1551,6 +1648,13 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             Vector axis=hoop.toVector().subtract(ballSpawn.toVector());axis.setY(0);
             Vector shot=shotOrigin.toVector().subtract(ballSpawn.toVector());shot.setY(0);
             if(axis.lengthSquared()>1 && shot.dot(axis)<-0.15)points=4;
+        }
+        if(streetMode && matchPhase==MatchPhase.LIVE){
+            if(lastShooter==null || !streetCleared || !Objects.equals(streetLastTeam,playerTeams.get(lastShooter)))return;
+            points=points>=3?2:1;String scorerSide=playerTeams.get(lastShooter);
+            scores.merge(scorerSide,points,Integer::sum);playerPoints.merge(lastShooter,points,Integer::sum);streetPossession(scorerSide,false);afterScore();
+            announce("§d§lSTREETBALL! §f"+Bukkit.getOfflinePlayer(lastShooter).getName()+" §7+"+points+" | §c"+scores.get("red")+" §7: §9"+scores.get("blue"));
+            if(scores.get(scorerSide)>=streetTarget || streetSuddenDeath)finishMatch(false);return;
         }
         if (matchPhase==MatchPhase.LIVE && (lastShooter==null || !opposite(side).equals(playerTeams.get(lastShooter))))return;
         scores.merge(matchPhase==MatchPhase.LIVE?opposite(side):side, points, Integer::sum);
@@ -1706,7 +1810,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             {"§d§lBasketballCraft 0.8.3 §7- Hilfe 1/4", "§e/bc help [1-4] §7- Befehlsliste", "§e/bc setup §7- Court-Editor-Menü", "§e/bc spawn add <1|2> §7- Teamspawn an eigener Position", "§e/bc wand §7- Editor-Stab", "§e/bc ball §7- Ball spawnen", "§e/bc reset §7- Punkte und Ball zurücksetzen", "§e/bc score §7- Punktestand"},
             {"§d§lBasketballCraft §7- Hilfe 2/4", "§e/bc arena save <name> §7- Nach beiden Ecken speichern", "§e/bc spawn list|show §7- Spawnpunkte", "§e/bc arena list §7- Hallen auflisten", "§e/bc arena select <name> §7- Halle wählen", "§e/bc arena show §7- Hallengrenzen", "§e/bc arena delete <name> §7- Halle löschen", "§e/bc showhoops §7- Korbringe an/aus"},
             {"§d§lBasketballCraft §7- Hilfe 3/4", "§e/bc three show §7- Dreierlinien anzeigen", "§e/bc spawn remove <1|2> [nummer] §7- Spawn löschen", "§e/bc spawn clear <1|2> §7- Teamspawns löschen", "§e/bc spawn ball §7- Ballspawn hier setzen", "§e/bc three undo <1|2> §7- Letzten Punkt löschen", "§e/bc three clear <1|2> §7- Linie löschen", "§e/bc wand 1|2|arena §7- Alte Markierungsstäbe", "§e/bc sethoop red|blue §7- Ring auf Augenhöhe", "§7Linksklick: Wurf | Rechtsklick: Pass", "§7Sprint+Sprung+Linksklick: Dunk"},
-            {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Admin-Zuschauer", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Genau auf Ball zielen + Rechtsklick"},
+            {"§d§lBasketballCraft 1.0 §7- Hilfe 4/4", "§e/bc team add <spieler> <1|2> §7- Team zuweisen", "§e/bc team remove <spieler> §7- Entfernen", "§e/bc team list|clear §7- Teams anzeigen/leeren", "§e/bc match time <minuten> §7- Matchdauer (Standard 5)", "§e/bc match start|stop §7- Match starten/beenden", "§e/bc match pause|resume §7- Pausieren/Fortsetzen", "§e/bc match status §7- Status", "§e/bc spectate §7- Live-Zuschauer mit Spielstand und Zeit", "§e/bc stats [spieler] §7- Statistiken", "§7Steal: Genau auf Ball zielen + Rechtsklick"},
             {"§d§lBasketballCraft 1.1 §7- Hilfe 5/5", "§e/bc restart set <1|2> §7- Ball-Resetpunkt setzen", "§e/bc restart show §7- Resetpunkte anzeigen", "§e/bc arena lock|unlock §7- Zuschauer-Feldsperre", "§e/bc arena bounds 1|2 §7- Außenlinien setzen", "§7Ball prallt an Arenagrenzen ab", "§e/bc neon on|off §7- Lila Neon-Feldrand", "§7Rechtsklick auf Ball: Steal (auch Teamkollegen)", "§7Event: kein PvP, Teamwesten Rot/Blau", "§e/bc history [anzahl] §7- Letzte Matches", "§e/bc leaderboard reset CONFIRM §7- Stats löschen"}
         };
         int idx=Math.max(1,Math.min(5,page))-1;
@@ -1715,9 +1819,9 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args) {
         List<String> options;
-        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","teamboard","npc","neon");
+        if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","teamboard","npc","neon","street");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board","teamboard"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "street"->List.of("create","hoop","spawn","three","bounds","player","target","time","shotclock","start","stop","status");case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board","teamboard"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
@@ -1898,6 +2002,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             help(sender,args.length>1 ? parsePage(args[1]) : 1);
             return true;
         }
+        if(args[0].equalsIgnoreCase("street"))return streetCommand(sender,args);
         if(args[0].equalsIgnoreCase("neon")) {
             if(!sender.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
             if(args.length>=2 && args[1].equalsIgnoreCase("wand")) {
@@ -2073,8 +2178,16 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
                 }
             }
             case "spectate" -> {
-                if(!observerOriginalModes.containsKey(p.getUniqueId())) {observerOriginalModes.put(p.getUniqueId(),p.getGameMode());p.setGameMode(GameMode.SPECTATOR);p.sendMessage("§aZuschauermodus aktiv. /bc spectate zum Beenden.");}
-                else {p.setGameMode(observerOriginalModes.remove(p.getUniqueId()));p.sendMessage("§aZuschauermodus beendet.");}
+                if(!observerOriginalModes.containsKey(p.getUniqueId())) {
+                    if(playing(p) && matchActive()) {p.sendMessage("§cAktive Spieler können während eines Matches nicht zuschauen.");break;}
+                    observerOriginalModes.put(p.getUniqueId(),p.getGameMode());
+                    p.setGameMode(GameMode.SPECTATOR);
+                    p.sendMessage("§aLive-Zuschauer aktiv! §7Spielstand und Restzeit rechts. §e/bc spectate §7zum Beenden.");
+                } else {
+                    p.setGameMode(observerOriginalModes.remove(p.getUniqueId()));
+                    p.sendMessage("§aZuschauermodus beendet.");
+                }
+                refreshBoards();
             }
             case "setup" -> { openSetup(p); }
             case "spawn" -> {
