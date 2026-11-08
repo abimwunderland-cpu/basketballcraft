@@ -44,6 +44,36 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         threeLines.clear();for(var e:classicThreeBackup.entrySet())threeLines.put(e.getKey(),new ArrayList<>(e.getValue()));
         ballSpawn=classicBallBackup;activeArena=classicArenaBackup;streetMode=false;streetSuddenDeath=false;
     }
+    // Dedicated street editor: right-click block to mark; left-click to cycle mode.
+    private final Map<UUID,Integer> streetWandMode=new HashMap<>();
+    private static final String[] STREET_MARKERS={"hoop","spawn1","spawn2","three","bound1","bound2"};
+    private ItemStack streetWand(){
+        ItemStack item=new ItemStack(Material.BLAZE_ROD);
+        ItemMeta meta=item.getItemMeta();meta.setDisplayName("§d§lStreetball Setup-Stab");
+        meta.setLore(List.of("§7Linksklick: Markierung wechseln", "§7Rechtsklick Block: Position speichern", "§7Korb, Spawns, Dreiergrenze, Feldgrenzen"));
+        meta.getPersistentDataContainer().set(new NamespacedKey(this,"street_wand"),PersistentDataType.BYTE,(byte)1);
+        item.setItemMeta(meta);return item;
+    }
+    private boolean isStreetWand(ItemStack item){return item!=null&&item.hasItemMeta()&&item.getItemMeta().getPersistentDataContainer().has(new NamespacedKey(this,"street_wand"),PersistentDataType.BYTE);}
+    private void streetMark(Player p,String marker,Location pos){
+        String key="street."+streetName+"."+marker;
+        if(marker.equals("hoop"))pos.add(0.5,0.5,0.5);
+        else pos.add(0.5,0,0.5);
+        getConfig().set(key,pos);saveConfig();
+        p.sendMessage("§aStreetball §f"+marker+" §agespeichert: §f"+pos.getBlockX()+" "+pos.getBlockY()+" "+pos.getBlockZ());
+        if(marker.equals("three"))p.sendMessage("§7Dreiergrenze: Abstand von diesem Punkt zum Ring (Kreis). ");
+        if(marker.startsWith("bound"))p.sendMessage("§7Beide gegenüberliegenden Ecken markieren, damit Spieler im Feld bleiben.");
+    }
+    private boolean streetWithin(Location pos){
+        if(!streetMode)return true;
+        Location a=getConfig().getLocation("street."+streetName+".bound1");
+        Location b=getConfig().getLocation("street."+streetName+".bound2");
+        if(a==null||b==null||pos.getWorld()!=a.getWorld()||pos.getWorld()!=b.getWorld())return true;
+        // X/Z bounds only: jumps and normal vertical movement remain possible.
+        double minX=Math.min(a.getX(),b.getX())-0.25,maxX=Math.max(a.getX(),b.getX())+0.25;
+        double minZ=Math.min(a.getZ(),b.getZ())-0.25,maxZ=Math.max(a.getZ(),b.getZ())+0.25;
+        return pos.getX()>=minX&&pos.getX()<=maxX&&pos.getZ()>=minZ&&pos.getZ()<=maxZ;
+    }
     private boolean streetOutside(Player p){
         Location h=hoops.get("red");if(h==null || h.getWorld()!=p.getWorld())return false;
         double dist=p.getLocation().distanceSquared(new Location(h.getWorld(),h.getX(),p.getY(),h.getZ()));
@@ -63,7 +93,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         }
     }
     private boolean streetCommand(CommandSender sender,String[] args){
-        if(args.length==1){sender.sendMessage("§d/bc street create <name> | hoop | spawn 1|2 | three | bounds 1|2 | player 1|2 <name> | target <punkte> | time <sek> | shotclock <sek> | start | stop | status");return true;}
+        if(args.length==1){sender.sendMessage("§d/bc street create <name> | wand | hoop | spawn 1|2 | three | bounds 1|2 | player 1|2 <name> | target <punkte> | time <sek> | shotclock <sek> | start | stop | status");return true;}
         if(!sender.hasPermission("basketball.admin")){sender.sendMessage("§cNur Admins.");return true;}
         String sub=args[1].toLowerCase(Locale.ROOT);
         if(sub.equals("status")){sender.sendMessage("§dStreetball §f"+streetName+" §7| Ziel "+streetTarget+" | Zeit "+streetDuration+"s | Shotclock "+streetShotClock+"s | "+(streetMode?"aktiv":"inaktiv"));return true;}
@@ -84,14 +114,20 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
             playerTeams.put(target.getUniqueId(),side);sender.sendMessage("§a"+target.getName()+" ist Spieler "+args[2]);return true;
         }
         if(!(sender instanceof Player p)){sender.sendMessage("§cNur im Spiel markieren.");return true;}
-        if(sub.equals("hoop")){getConfig().set("street."+streetName+".hoop",p.getLocation());saveConfig();p.sendMessage("§aStreet-Korb markiert (Position des Rings!).");return true;}
-        if(sub.equals("spawn") && args.length>=3 && List.of("1","2").contains(args[2])){getConfig().set("street."+streetName+".spawn"+args[2],p.getLocation());saveConfig();p.sendMessage("§aSpieler-Spawn "+args[2]+" gespeichert.");return true;}
-        if(sub.equals("three")){getConfig().set("street."+streetName+".three",p.getLocation());saveConfig();p.sendMessage("§aDreierlinie-Referenz markiert. Abstand zum Korb bestimmt die Grenze.");return true;}
-        if(sub.equals("bounds") && args.length>=3 && List.of("1","2").contains(args[2])){getConfig().set("street."+streetName+".bound"+args[2],p.getLocation());saveConfig();p.sendMessage("§aFeld-Ecke "+args[2]+" gespeichert.");return true;}
+        if(sub.equals("wand")){p.getInventory().addItem(streetWand());streetWandMode.put(p.getUniqueId(),0);p.sendMessage("§dStreetball-Stab erhalten! §7Linksklick wechselt Modus, Rechtsklick markiert Block.");return true;}
+        if(sub.equals("hoop")){streetMark(p,"hoop",p.getLocation().subtract(0.5,0.5,0.5));return true;}
+        if(sub.equals("spawn") && args.length>=3 && List.of("1","2").contains(args[2])){streetMark(p,"spawn"+args[2],p.getLocation().subtract(0.5,0,0.5));p.sendMessage("§aSpieler-Spawn "+args[2]+" gespeichert.");return true;}
+        if(sub.equals("three")){streetMark(p,"three",p.getLocation().subtract(0.5,0,0.5));p.sendMessage("§aDreierlinie-Referenz markiert. Abstand zum Korb bestimmt die Grenze.");return true;}
+        if(sub.equals("bounds") && args.length>=3 && List.of("1","2").contains(args[2])){streetMark(p,"bound"+args[2],p.getLocation().subtract(0.5,0,0.5));p.sendMessage("§aFeld-Ecke "+args[2]+" gespeichert.");return true;}
         if(sub.equals("start")){
             String base="street."+streetName+".";
             Location hoop=getConfig().getLocation(base+"hoop"),a=getConfig().getLocation(base+"spawn1"),b=getConfig().getLocation(base+"spawn2");
             if(hoop==null||a==null||b==null||hoop.getWorld()!=a.getWorld()||a.getWorld()!=b.getWorld()){p.sendMessage("§cHoop und beide Spawns in derselben Welt markieren.");return true;}
+            Location boundA=getConfig().getLocation(base+"bound1"),boundB=getConfig().getLocation(base+"bound2");
+            if(boundA==null||boundB==null||boundA.getWorld()!=hoop.getWorld()||boundB.getWorld()!=hoop.getWorld()){p.sendMessage("§cBitte mit /bc street wand beide Spielfeldecken markieren.");return true;}
+            double lowX=Math.min(boundA.getX(),boundB.getX())-0.25,highX=Math.max(boundA.getX(),boundB.getX())+0.25;
+            double lowZ=Math.min(boundA.getZ(),boundB.getZ())-0.25,highZ=Math.max(boundA.getZ(),boundB.getZ())+0.25;
+            if(a.getX()<lowX||a.getX()>highX||a.getZ()<lowZ||a.getZ()>highZ||b.getX()<lowX||b.getX()>highX||b.getZ()<lowZ||b.getZ()>highZ){p.sendMessage("§cBeide Spieler-Spawns müssen innerhalb der Spielfeldgrenzen liegen.");return true;}
             if(playerTeams.size()!=2||!playerTeams.containsValue("red")||!playerTeams.containsValue("blue")){p.sendMessage("§cZwei Spieler mit /bc street player 1|2 <name> eintragen.");return true;}
             classicHoopsBackup.clear();classicHoopsBackup.putAll(hoops);classicSpawnsBackup.clear();for(var e:teamSpawns.entrySet())classicSpawnsBackup.put(e.getKey(),new ArrayList<>(e.getValue()));
             classicThreeBackup.clear();for(var e:threeLines.entrySet())classicThreeBackup.put(e.getKey(),new ArrayList<>(e.getValue()));
@@ -1155,6 +1191,17 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
     @EventHandler(priority = EventPriority.HIGH) public void onInteract(PlayerInteractEvent event) {
         Player p = event.getPlayer();
         Action action = event.getAction();
+        if(isStreetWand(event.getItem()) && p.hasPermission("basketball.admin")){
+            if(event.getHand()!=org.bukkit.inventory.EquipmentSlot.HAND)return;
+            event.setCancelled(true);
+            if(action==Action.LEFT_CLICK_AIR||action==Action.LEFT_CLICK_BLOCK){
+                int mode=(streetWandMode.getOrDefault(p.getUniqueId(),0)+1)%STREET_MARKERS.length;
+                streetWandMode.put(p.getUniqueId(),mode);p.sendActionBar("§dStreetball-Editor §f"+STREET_MARKERS[mode]);
+            }else if(action==Action.RIGHT_CLICK_BLOCK && event.getClickedBlock()!=null){
+                String marker=STREET_MARKERS[streetWandMode.getOrDefault(p.getUniqueId(),0)];
+                streetMark(p,marker,event.getClickedBlock().getLocation());
+            }return;
+        }
         String wand = wandType(event.getItem());
         if ("neon".equals(wand) && p.hasPermission("basketball.admin")) {
             if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) return;
@@ -1485,6 +1532,14 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         double dx = to.getX() - from.getX();
         double dz = to.getZ() - from.getZ();
         if (dx * dx + dz * dz > 0.000001) lastHorizontalMove.put(id, tick);
+        // Streetball has its own independently saved rectangular bounds.
+        if(streetMode && matchActive() && playing(p) && streetWithin(from) && !streetWithin(to)){
+            Location restricted=to.clone();restricted.setX(from.getX());restricted.setZ(from.getZ());
+            e.setTo(restricted);
+            if(tick>=boundaryWarnings.getOrDefault(id,0)){
+                p.sendActionBar("§cSTREETBALL §7Spielfeldgrenze!");boundaryWarnings.put(id,tick+40);
+            }return;
+        }
         // Active players cannot escape the court, even when carrying the ball.
         if (matchActive() && playing(p) && insideCourt(from) && !insideCourt(to)) {
             Location restricted=to.clone();restricted.setX(from.getX());restricted.setZ(from.getZ());
@@ -1821,7 +1876,7 @@ public final class BasketballCraft extends JavaPlugin implements Listener, TabEx
         List<String> options;
         if(args.length==1)options=List.of("help","setup","wand","ball","start","reset","score","arena","three","spawn","showhoops","sethoop","team","match","spectate","stats","restart","history","leaderboard","league","music","sound","matchup","board","teamboard","npc","neon","street");
         else if(args.length==2) options=switch(args[0].toLowerCase(Locale.ROOT)) {
-            case "street"->List.of("create","hoop","spawn","three","bounds","player","target","time","shotclock","start","stop","status");case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board","teamboard"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
+            case "street"->List.of("create","wand","hoop","spawn","three","bounds","player","target","time","shotclock","start","stop","status");case "help"->List.of("1","2","3","4","5");case "neon"->List.of("on","off","status","wand","clear");case "league"->List.of("create","matchup","delete","set","list");case "music","sound"->List.of("on","off");case "board","teamboard"->List.of("set","remove","refresh");case "npc"->List.of("spawn","remove","list");case "team"->List.of("create","add","remove","list","delete");case "match"->List.of("start","stop","pause","resume","time","status");case "wand"->List.of("1","2","arena","editor");case "arena"->List.of("save","list","select","show","delete","lock","unlock","bounds");case "spawn"->List.of("add","list","show","remove","clear","ball");case "three"->List.of("show","undo","clear");case "sethoop"->List.of("red","blue");case "restart"->List.of("set","show");default->List.of();};
         else if(args.length==3 && args[0].equalsIgnoreCase("arena") && args[1].equalsIgnoreCase("bounds"))options=List.of("1","2","show","clear");
         else if(args.length==3 && args[0].equalsIgnoreCase("restart") && args[1].equalsIgnoreCase("set"))options=List.of("1","2");
         else if(args.length==3 && args[0].equalsIgnoreCase("team") && List.of("add","remove").contains(args[1]))options=Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
